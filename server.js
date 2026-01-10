@@ -4,7 +4,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const mongoSanitize = require("express-mongo-sanitize");
-const cookieParser = require("cookie-parser"); // Added for HttpOnly cookies
+const cookieParser = require("cookie-parser");
 require("dotenv").config();
 
 const app = express();
@@ -13,11 +13,13 @@ const PORT = process.env.PORT || 5000;
 // --- SECURITY MIDDLEWARE ---
 
 app.use(helmet());
-app.use(cookieParser()); // Parse cookies before routes
+app.use(cookieParser());
 
+// INCREASED RATE LIMIT FOR DEVELOPMENT:
+// 1000 requests per 15 mins to accommodate polling and reloads
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 100,
+  max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
   message: {
@@ -28,13 +30,13 @@ const limiter = rateLimit({
 app.use("/api/", limiter);
 app.use(mongoSanitize());
 
-// Update CORS to allow cookies (credentials)
+// REFINED CORS CONFIGURATION
 app.use(
   cors({
     origin: "http://localhost:4200",
-    methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type", "x-auth-token"],
-    credentials: true, // MANDATORY for HttpOnly cookies
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "x-auth-token", "Authorization"],
+    credentials: true,
   })
 );
 
