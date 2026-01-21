@@ -58,6 +58,8 @@ mongoose
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/menu", require("./routes/menu"));
 app.use("/api/orders", require("./routes/orders"));
+app.use("/api/rating", require("./routes/rating"));
+
 
 app.get("/", (req, res) => res.send("Killa Restaurant API Running 🚀"));
 
