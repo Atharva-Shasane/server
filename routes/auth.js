@@ -26,18 +26,17 @@ async function sendOTPEmail(email, otp) {
         Authorization: `Bearer ${RESEND_API_KEY}`,
       },
       body: JSON.stringify({
-        from: "Killa Resto <onboarding@resend.dev>", // NOTE: Resend requires verified domains in production
-        to: [email],
-        subject: "Your Killa Resto Verification Code",
+        from: "Killa Resto <onboarding@resend.dev>",
+        to: email,
+        subject: `${otp} is your Killa Resto verification code`,
         html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
-            <h2 style="color: #ff6600;">Killa Resto Verification</h2>
-            <p>Your 6-digit verification code is:</p>
-            <div style="font-size: 32px; font-weight: bold; letter-spacing: 5px; color: #333; margin: 20px 0;">
+          <div style="font-family: 'Poppins', sans-serif; max-width: 500px; margin: auto; padding: 40px; border: 1px solid #222; border-radius: 24px; background: #0a0a0a; color: white;">
+            <h2 style="color: #ff6600; font-size: 24px; font-weight: 800; margin-bottom: 20px;">Identity Verification</h2>
+            <p style="color: #aaa; font-size: 16px; line-height: 1.6;">Use the following legendary code to secure your session. This code is valid for 5 minutes.</p>
+            <div style="font-size: 42px; font-weight: 900; letter-spacing: 10px; color: #ff6600; margin: 30px 0; text-align: center; background: #111; padding: 20px; border-radius: 12px; border: 1px solid #333;">
               ${otp}
             </div>
-            <p>This code will expire in 5 minutes. If you did not request this, please ignore this email.</p>
-            <p style="font-size: 12px; color: #888;">Note: If you are using a Resend free account, ensure '${email}' is a verified recipient.</p>
+            <p style="color: #666; font-size: 13px;">If you didn't request this code, you can safely ignore this email.</p>
           </div>
         `,
       }),
@@ -46,34 +45,25 @@ async function sendOTPEmail(email, otp) {
     const data = await response.json();
 
     if (!response.ok) {
-      // Log exactly what Resend says is wrong
       console.error("❌ [RESEND API ERROR]:", data);
       throw new Error(data.message || "Failed to send email");
     }
 
     console.log(
-      `✅ [AUTH] Email sent successfully to ${email}. ID: ${data.id}`
+      `✅ [AUTH] Email sent successfully to ${email}. ID: ${data.id}`,
     );
   } catch (error) {
     console.error("❌ [EMAIL SYSTEM FAILURE]:", error.message);
-    // Fallback so you can still login during development
     console.log(`[EMERGENCY OTP LOG] Code for ${email}: ${otp}`);
   }
 }
 
-/**
- * Helper: Generate 6-digit OTP
- */
 const generateOTP = () =>
   Math.floor(100000 + Math.random() * 900000).toString();
 
-/**
- * Password Validator: Strong password check
- */
-const isPasswordStrong = (password) => {
-  const regex =
-    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{6,}$/;
-  return regex.test(password);
+const isPasswordStrong = (pwd) => {
+  const regex = /^(?=.*[A-Z])(?=.*[!@#$%^&*])(?=.{6,})/;
+  return regex.test(pwd);
 };
 
 /**
@@ -82,19 +72,18 @@ const isPasswordStrong = (password) => {
  */
 router.post("/request-otp", async (req, res) => {
   const { email } = req.body;
+
   if (!email) return res.status(400).json({ msg: "Email is required" });
 
   const otp = generateOTP();
 
   try {
-    // Save/Update OTP in database
     await Otp.findOneAndUpdate(
       { email: email.toLowerCase() },
       { otp, attempts: 0, createdAt: new Date() },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
-    // Send the actual email
     await sendOTPEmail(email.toLowerCase(), otp);
 
     res.json({ msg: "Verification code sent to your email." });
@@ -112,13 +101,13 @@ router.post("/register", async (req, res) => {
   const { name, email, mobile, password, otp } = req.body;
 
   if (!isPasswordStrong(password)) {
-    return res.status(400).json({
-      msg: "Password must be 6+ chars with 1 uppercase, 1 number, and 1 special character.",
-    });
+    return res
+      .status(400)
+      .json({ msg: "Password does not meet security requirements" });
   }
 
-  // Verify OTP
   const storedOtp = await Otp.findOne({ email: email.toLowerCase() });
+
   if (!storedOtp)
     return res.status(400).json({ msg: "OTP expired or not requested." });
 
@@ -132,6 +121,7 @@ router.post("/register", async (req, res) => {
         .status(400)
         .json({ msg: "Too many failed attempts. Please request a new code." });
     }
+
     return res
       .status(400)
       .json({
@@ -153,20 +143,20 @@ router.post("/register", async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     user.passwordHash = await bcrypt.hash(password, salt);
-    await user.save();
 
-    await Otp.deleteOne({ _id: storedOtp._id });
+    await user.save();
+    await Otp.deleteOne({ email: email.toLowerCase() });
 
     const payload = { user: { id: user.id, role: user.role } };
     const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
-      expiresIn: "7d",
+      expiresIn: "1h", // JWT expires in 1 hour
     });
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 1 * 60 * 60 * 1000, // Cookie expires in 1 hour (3600000 ms)
     });
 
     res.json({
@@ -205,7 +195,7 @@ router.post("/login", async (req, res) => {
         await Otp.findOneAndUpdate(
           { email: email.toLowerCase() },
           { otp: newOtp, attempts: 0, createdAt: new Date() },
-          { upsert: true }
+          { upsert: true },
         );
         await sendOTPEmail(email.toLowerCase(), newOtp);
         return res.json({
@@ -217,6 +207,7 @@ router.post("/login", async (req, res) => {
       if (!storedOtp || storedOtp.otp !== otp) {
         return res.status(400).json({ msg: "Invalid or expired OTP" });
       }
+
       await Otp.deleteOne({ email: email.toLowerCase() });
     }
 
@@ -225,14 +216,14 @@ router.post("/login", async (req, res) => {
 
     const payload = { user: { id: user.id, role: user.role } };
     const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
-      expiresIn: "7d",
+      expiresIn: "1h", // JWT expires in 1 hour
     });
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Lax",
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 1 * 60 * 60 * 1000, // Cookie expires in 1 hour
     });
 
     res.json({
@@ -245,7 +236,7 @@ router.post("/login", async (req, res) => {
     });
   } catch (err) {
     console.error(err.message);
-    res.status(500).send("Server error");
+    res.status(500).send("Server Error");
   }
 });
 
