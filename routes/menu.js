@@ -26,63 +26,57 @@ router.post("/recommendations", async (req, res) => {
   try {
     const { userId } = req.body;
 
-    // 1. Call the Python Microservice
-    // Defaulting to localhost:8000 (standard FastAPI port)
-    // Implement exponential backoff for retries
+    // 1. Attempt to call the Python Microservice
     let pythonResponse;
     try {
-      const aiResponse = await fetch("http://localhost:8000/aiml/recommend");
+      pythonResponse = await axios.post(
+        "http://localhost:8000/aiml/recommend",
+        {
+          userId: userId || null,
+        },
+        { timeout: 3000 },
+      );
 
-const recommendationData = await aiResponse.json();
-// Flask returns: { recommendations: ["id1","id2"] }
+      const itemIds = pythonResponse.data.recommendations;
 
-const recommendedItems = await MenuItem.find({
-  _id: { $in: recommendationData.recommendations },
-});
+      // 2. Handle Case: AI is working but there are no orders in DB yet (Cold Start)
+      if (!itemIds || itemIds.length === 0) {
+        console.log(
+          `[AI INFO] No sales data available for user ${userId}. Returning popular items.`,
+        );
+        const fallbackItems = await MenuItem.find({
+          isAvailable: true,
+          category: { $ne: "drinks" },
+        }).limit(4);
+        return res.json(fallbackItems);
+      }
 
-res.json(recommendedItems);
+      // 3. Fetch full details for the IDs returned by Python
+      const recommendedDishes = await MenuItem.find({
+        _id: { $in: itemIds },
+      });
 
-     try {
-  const aiResponse = await fetch("http://localhost:8000/aiml/recommend");
+      // 4. Maintain AI priority order
+      const sortedDishes = itemIds
+        .map((id) => recommendedDishes.find((d) => d._id.toString() === id))
+        .filter(Boolean);
 
-  const recommendationData = await aiResponse.json();
-  // Flask returns: { recommendations: ["id1","id2"] }
-
-  const recommendedItems = await MenuItem.find({
-    _id: { $in: recommendationData.recommendations },
-  });
-
-  res.json(recommendedItems);
-
-} catch (aiErr) {
-  console.warn("AI Service unreachable, falling back to popularity logic.");
-  const popularItems = await MenuItem.find({ isAvailable: true }).limit(4);
-  res.json(popularItems);
-}
-
+      return res.json(sortedDishes);
     } catch (aiErr) {
-      // FALLBACK: If AI is down, return top 4 most popular items instead
-      console.warn("AI Service unreachable, falling back to popularity logic.");
-      const popularItems = await MenuItem.find({ isAvailable: true }).limit(4);
-      res.json(popularItems);
+      // 5. Handle Case: AI Service is actually offline or crashed
+      console.warn(
+        `[AI OFFLINE] Falling back to manual popularity logic: ${aiErr.message}`,
+      );
+
+      const popularityFallback = await MenuItem.find({
+        isAvailable: true,
+        category: { $ne: "drinks" },
+      }).limit(4);
+
+      return res.json(popularityFallback);
     }
-
-    const itemIds = pythonResponse.data.recommendations;
-
-    // 2. Fetch full details for the IDs returned by Python
-    // We maintain the order returned by the Python model
-    const recommendedDishes = await MenuItem.find({
-      _id: { $in: itemIds },
-    });
-
-    // Re-sort to match the Python model's priority
-    const sortedDishes = itemIds
-      .map((id) => recommendedDishes.find((d) => d._id.toString() === id))
-      .filter(Boolean);
-
-    res.json(sortedDishes);
   } catch (err) {
-    console.error(err.message);
+    console.error("Critical Recommendation Bridge Error:", err.message);
     res.status(500).send("Recommendation Bridge Error");
   }
 });
