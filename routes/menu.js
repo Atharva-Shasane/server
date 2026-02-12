@@ -42,24 +42,35 @@ router.get("/recommendations", auth, async (req, res) => {
     // 3. Call the Python FastAPI (Assuming it runs on port 8000)
     // The AI developer just needs to listen for this POST request
     try {
-      const aiResponse = await fetch("http://localhost:8000/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId: userId,
-          history: historyIds,
-          menu: fullMenu,
-        }),
-      });
+      const aiResponse = await fetch("http://localhost:8000/aiml/recommend");
 
-      const recommendationData = await aiResponse.json();
-      // Expecting AI to return { recommendedIds: ["id1", "id2"...] }
+const recommendationData = await aiResponse.json();
+// Flask returns: { recommendations: ["id1","id2"] }
 
-      const recommendedItems = await MenuItem.find({
-        _id: { $in: recommendationData.recommendedIds },
-      });
+const recommendedItems = await MenuItem.find({
+  _id: { $in: recommendationData.recommendations },
+});
 
-      res.json(recommendedItems);
+res.json(recommendedItems);
+
+     try {
+  const aiResponse = await fetch("http://localhost:8000/aiml/recommend");
+
+  const recommendationData = await aiResponse.json();
+  // Flask returns: { recommendations: ["id1","id2"] }
+
+  const recommendedItems = await MenuItem.find({
+    _id: { $in: recommendationData.recommendations },
+  });
+
+  res.json(recommendedItems);
+
+} catch (aiErr) {
+  console.warn("AI Service unreachable, falling back to popularity logic.");
+  const popularItems = await MenuItem.find({ isAvailable: true }).limit(4);
+  res.json(popularItems);
+}
+
     } catch (aiErr) {
       // FALLBACK: If AI is down, return top 4 most popular items instead
       console.warn("AI Service unreachable, falling back to popularity logic.");
