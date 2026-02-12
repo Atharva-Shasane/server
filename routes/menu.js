@@ -31,7 +31,6 @@ router.post("/recommendations", async (req, res) => {
     // Implement exponential backoff for retries
     let pythonResponse;
     try {
-<<<<<<< HEAD
       const aiResponse = await fetch("http://localhost:8000/aiml/recommend");
 
 const recommendationData = await aiResponse.json();
@@ -66,22 +65,6 @@ res.json(recommendedItems);
       console.warn("AI Service unreachable, falling back to popularity logic.");
       const popularItems = await MenuItem.find({ isAvailable: true }).limit(4);
       res.json(popularItems);
-=======
-      pythonResponse = await axios.post(
-        "http://localhost:8000/recommend",
-        {
-          userId: userId || null,
-        },
-        { timeout: 3000 },
-      );
-    } catch (pyErr) {
-      // Fallback: If Python service is down, return latest 5 items as emergency backup
-      console.error("Python Recommender Offline. Using fallback.");
-      const fallbackItems = await MenuItem.find({
-        category: { $ne: "drinks" },
-      }).limit(5);
-      return res.json(fallbackItems);
->>>>>>> d6b670362dd882e28a9e08ada64e5a843dc21cde
     }
 
     const itemIds = pythonResponse.data.recommendations;
