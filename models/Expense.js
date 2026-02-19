@@ -1,15 +1,26 @@
 const mongoose = require('mongoose');
-const { Schema } = mongoose;
 
-const ExpenseSchema = new Schema({
-  description: { type: String, required: true },
-  amount: { type: Number, required: true },
+/**
+ * Expense Schema
+ * Tracks manual business costs like Rent, Utilities, and Supplies
+ */
+const ExpenseSchema = new mongoose.Schema({
+  description: { 
+    type: String, 
+    required: true 
+  },
+  amount: { 
+    type: Number, 
+    required: true 
+  },
   category: { 
     type: String, 
-    enum: ['SUPPLIES', 'SALARY', 'RENT', 'UTILITIES', 'MARKETING', 'OTHER'], 
-    default: 'SUPPLIES' 
+    required: true 
   },
-  date: { type: Date, default: Date.now }
+  date: { 
+    type: Date, 
+    default: Date.now 
+  }
 });
 
-module.exports = mongoose.model("Expense", ExpenseSchema);
+module.exports = mongoose.model('Expense', ExpenseSchema);

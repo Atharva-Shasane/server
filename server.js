@@ -11,12 +11,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // --- SECURITY MIDDLEWARE ---
-
 app.use(helmet());
 app.use(cookieParser());
 
 // INCREASED RATE LIMIT FOR DEVELOPMENT:
-// 1000 requests per 15 mins to accommodate polling and reloads
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 1000,
@@ -40,7 +38,12 @@ app.use(
   })
 );
 
-app.use(express.json({ limit: "10kb" }));
+/** * --- BODY PARSING MIDDLEWARE (UPDATED) ---
+ * These lines allow the server to read the 'req.body' 
+ * from your Analytics expense form.
+ */
+app.use(express.json()); 
+app.use(express.urlencoded({ extended: true }));
 
 // --- DEBUGGING ---
 app.use((req, res, next) => {
