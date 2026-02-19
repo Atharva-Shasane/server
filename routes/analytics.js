@@ -87,4 +87,134 @@ router.get('/today', async (req, res) => {
   }
 });
 
+/**
+ * @route   GET /api/analytics/expenses/list
+ * @desc    Get all manual expenses for the current year
+ */
+router.get('/expenses/list', async (req, res) => {
+  try {
+    const year = new Date().getFullYear();
+    const expenses = await Expense.find({
+      date: { 
+        $gte: new Date(`${year}-01-01`), 
+        $lte: new Date(`${year}-12-31`) 
+      }
+    }).sort({ date: -1 });
+    res.json(expenses);
+  } catch (err) {
+    res.status(500).json({ msg: "Server Error" });
+  }
+});
+
+/**
+ * @route   PUT /api/analytics/expenses/:id
+ * @desc    Update an existing expense
+ */
+router.put('/expenses/:id', async (req, res) => {
+  try {
+    const { description, amount, category } = req.body;
+    const updatedExpense = await Expense.findByIdAndUpdate(
+      req.params.id,
+      { description, amount: Number(amount), category },
+      { new: true }
+    );
+    res.json({ msg: "Updated successfully", data: updatedExpense });
+  } catch (err) {
+    res.status(500).json({ msg: "Update failed" });
+  }
+});
+
+/**
+ * @route   GET /api/analytics/payment-comparison
+ * @desc    Get daily online vs offline payment totals for a specific month
+ */
+router.get('/payment-comparison', async (req, res) => {
+  try {
+    const month = parseInt(req.query.month) || new Date().getMonth() + 1;
+    const year = parseInt(req.query.year) || new Date().getFullYear();
+
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+
+    const paymentData = await Order.aggregate([
+      {
+        $match: {
+          scheduledTime: { $gte: startOfMonth, $lte: endOfMonth },
+          orderStatus: "COMPLETED"
+        }
+      },
+      {
+        $group: {
+          _id: { 
+            day: { $dayOfMonth: "$scheduledTime" }, 
+            method: "$paymentMethod" 
+          },
+          totalAmount: { $sum: "$totalAmount" },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    // Format data for the line graph (Days 1 to End of Month)
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const dailyStats = Array.from({ length: daysInMonth }, (_, i) => ({
+      day: i + 1,
+      online: 0,
+      offline: 0
+    }));
+
+    let totalOnlineCount = 0;
+    let totalOfflineCount = 0;
+
+    paymentData.forEach(d => {
+      const dayIndex = d._id.day - 1;
+      if (d._id.method === "ONLINE") {
+        dailyStats[dayIndex].online = d.totalAmount;
+        totalOnlineCount += d.count;
+      } else {
+        dailyStats[dayIndex].offline = d.totalAmount;
+        totalOfflineCount += d.count;
+      }
+    });
+
+    res.json({ dailyStats, totalOnlineCount, totalOfflineCount });
+  } catch (err) {
+    res.status(500).json({ msg: "Server Error" });
+  }
+});
+
+router.get('/payment-comparison', async (req, res) => {
+  try {
+    // These lines ensure the year is dynamic
+    const month = parseInt(req.query.month) || new Date().getMonth() + 1;
+    const year = parseInt(req.query.year) || new Date().getFullYear();
+
+    const startOfMonth = new Date(year, month - 1, 1);
+    const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+
+    const paymentData = await Order.aggregate([
+      {
+        $match: {
+          scheduledTime: { $gte: startOfMonth, $lte: endOfMonth },
+          orderStatus: "COMPLETED"
+        }
+      },
+      {
+        $group: {
+          _id: { 
+            day: { $dayOfMonth: "$scheduledTime" }, 
+            method: "$paymentMethod" 
+          },
+          totalAmount: { $sum: "$totalAmount" },
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+    // ... remaining logic to format dailyStats, totalOnlineCount, etc
+    res.json({ dailyStats, totalOnlineCount, totalOfflineCount });
+  } catch (err) {
+    res.status(500).json({ msg: "Server Error" });
+  }
+}); 
+
 module.exports = router;
