@@ -1,21 +1,20 @@
 const express = require("express");
 const router = express.Router();
 const Order = require("../models/Order");
-const MenuItem = require("../models/MenuItem");
 const Counter = require("../models/Counter");
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 
 /**
- * @route   POST api/orders
- * @desc    Create a new order with server-side price validation and 6-digit sequential ID
- * @access  Private
+ * @route POST api/orders
+ * @desc Create a new order with 6-digit sequential ID (e.g., 000001)
  */
 router.post("/", auth, async (req, res) => {
   try {
     const {
       orderType,
       items,
+      totalAmount,
       paymentMethod,
       numberOfPeople,
       scheduledTime,
@@ -23,50 +22,7 @@ router.post("/", auth, async (req, res) => {
       transactionId,
     } = req.body;
 
-    if (!items || items.length === 0) {
-      return res.status(400).json({ msg: "No items in order" });
-    }
-
-    // --- SECURITY ENHANCEMENT: SERVER-SIDE PRICE VALIDATION ---
-    let validatedTotal = 0;
-    const validatedItems = [];
-
-    for (const item of items) {
-      const dbItem = await MenuItem.findById(item.menuItemId);
-      if (!dbItem || !dbItem.isAvailable) {
-        return res
-          .status(400)
-          .json({ msg: `Item ${item.name} is no longer available.` });
-      }
-
-      let currentPrice = 0;
-      // Determine the correct price based on the variant from the DB, not the request
-      if (item.variant === "SINGLE") {
-        currentPrice = dbItem.pricing.price || 0;
-      } else if (item.variant === "HALF") {
-        currentPrice = dbItem.pricing.priceHalf || 0;
-      } else if (item.variant === "FULL") {
-        currentPrice = dbItem.pricing.priceFull || 0;
-      } else {
-        return res.status(400).json({ msg: "Invalid variant specified." });
-      }
-
-      const itemTotal = currentPrice * item.quantity;
-      validatedTotal += itemTotal;
-
-      validatedItems.push({
-        menuItemId: dbItem._id,
-        name: dbItem.name,
-        quantity: item.quantity,
-        unitPrice: currentPrice,
-        variant: item.variant,
-      });
-    }
-
-    // Apply Tax (5% as per business logic in frontend)
-    const totalWithTax = Math.round(validatedTotal * 1.05);
-
-    // 1. Increment sequence for order number
+    // 1. Increment sequence
     let counter = await Counter.findOneAndUpdate(
       { id: "orderNumber" },
       { $inc: { seq: 1 } },
@@ -76,32 +32,30 @@ router.post("/", auth, async (req, res) => {
     // 2. Pad the sequence to 6 digits (e.g., 1 becomes "000001")
     const paddedOrderNumber = counter.seq.toString().padStart(6, "0");
 
-    // 3. Create order with validated data
+    // 3. Create order with the padded string
     const newOrder = new Order({
       userId: req.user.id,
       orderNumber: paddedOrderNumber,
       orderType,
-      items: validatedItems,
-      totalAmount: totalWithTax,
+      items,
+      totalAmount,
       paymentMethod,
       numberOfPeople,
       scheduledTime,
       paymentStatus: paymentStatus || "PENDING",
-      transactionId: transactionId || null,
+      transactionId: transactionId || "",
     });
 
     const order = await newOrder.save();
     res.json(order);
   } catch (err) {
     console.error(err.message);
-    res.status(500).send("Server Error during order creation");
+    res.status(500).send("Server Error");
   }
 });
 
 /**
- * @route   GET api/orders/my-orders
- * @desc    Get logged in user's orders
- * @access  Private
+ * @route GET api/orders/my-orders
  */
 router.get("/my-orders", auth, async (req, res) => {
   try {
@@ -116,24 +70,16 @@ router.get("/my-orders", auth, async (req, res) => {
 });
 
 /**
- * @route   PUT api/orders/:id/cancel
- * @desc    Cancel a new order
- * @access  Private
+ * @route PUT api/orders/:id/cancel
  */
 router.put("/:id/cancel", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
-
     if (!order) return res.status(404).json({ msg: "Order not found" });
-
     if (order.userId.toString() !== req.user.id)
       return res.status(401).json({ msg: "User not authorized" });
-
-    // Only "NEW" orders can be cancelled
     if (order.orderStatus !== "NEW")
-      return res
-        .status(400)
-        .json({ msg: "Cannot cancel order already in progress" });
+      return res.status(400).json({ msg: "Cannot cancel order in progress" });
 
     order.orderStatus = "CANCELLED";
     await order.save();
@@ -145,9 +91,7 @@ router.put("/:id/cancel", auth, async (req, res) => {
 });
 
 /**
- * @route   GET api/orders/owner/all
- * @desc    Get all orders for the dashboard
- * @access  Private/Admin
+ * @route GET api/orders/owner/all
  */
 router.get("/owner/all", [auth, admin], async (req, res) => {
   try {
@@ -162,15 +106,12 @@ router.get("/owner/all", [auth, admin], async (req, res) => {
 });
 
 /**
- * @route   PUT api/orders/owner/:id/status
- * @desc    Update order status
- * @access  Private/Admin
+ * @route PUT api/orders/owner/:id/status
  */
 router.put("/owner/:id/status", [auth, admin], async (req, res) => {
   try {
     const { status, paymentStatus } = req.body;
     const order = await Order.findById(req.params.id);
-
     if (!order) return res.status(404).json({ msg: "Order not found" });
 
     order.orderStatus = status;
