@@ -1,12 +1,13 @@
 const express = require("express");
 const router = express.Router();
 const auth = require("../middleware/auth");
+const admin = require("../middleware/admin");
 const Rating = require("../models/Rating");
 const Order = require("../models/Order");
 
 /**
- * @route GET api/rating/check-pending
- * @desc Check if user has a completed order that hasn't been rated or dismissed
+ * @route   GET api/rating/check-pending
+ * @desc    Check for latest unrated completed order
  */
 router.get("/check-pending", auth, async (req, res) => {
   try {
@@ -15,15 +16,13 @@ router.get("/check-pending", auth, async (req, res) => {
       orderStatus: "COMPLETED",
     }).sort({ createdAt: -1 });
 
-    if (!lastOrder) {
-      return res.json({ pending: false });
-    }
+    if (!lastOrder) return res.json({ pending: false });
 
     const existingRating = await Rating.findOne({ orderId: lastOrder._id });
 
-    if (existingRating) {
-      return res.json({ pending: false });
-    }
+    // If a record exists AND it was submitted, it's not pending.
+    // If it exists but wasn't submitted (rating 0), it's also not pending (user said 'Later')
+    if (existingRating) return res.json({ pending: false });
 
     res.json({
       pending: true,
@@ -32,78 +31,76 @@ router.get("/check-pending", auth, async (req, res) => {
         orderNumber: lastOrder.orderNumber,
         items: lastOrder.items,
         totalAmount: lastOrder.totalAmount,
-        createdAt: lastOrder.createdAt,
       },
     });
   } catch (err) {
-    console.error("Check Pending Error:", err.message);
     res.status(500).send("Server Error");
   }
 });
 
 /**
- * @route POST api/rating/dismiss
- * @desc Permanently ignore feedback for a specific order
- */
-router.post("/dismiss", auth, async (req, res) => {
-  const { orderId } = req.body;
-  if (!orderId) return res.status(400).json({ msg: "Order ID required" });
-
-  try {
-    const existing = await Rating.findOne({ orderId });
-    if (existing) return res.json({ msg: "Already processed" });
-
-    const dismissedRating = new Rating({
-      userId: req.user.id,
-      orderId,
-      rating: 0, // 0 marks it as dismissed
-      comment: "USER_DISMISSED",
-    });
-
-    await dismissedRating.save();
-    res.json({ msg: "Feedback invitation dismissed." });
-  } catch (err) {
-    res.status(500).send("Server Error");
-  }
-});
-
-/**
- * @route POST api/rating
- * @desc Submit a new rating
+ * @route   POST api/rating
+ * @desc    Submit or update feedback for an order
  */
 router.post("/", auth, async (req, res) => {
   const { orderId, rating, comment } = req.body;
 
-  if (!orderId) return res.status(400).json({ msg: "Order ID required" });
-  if (!rating || rating < 1 || rating > 5) {
-    return res
-      .status(400)
-      .json({ msg: "Please provide a valid rating between 1 and 5." });
-  }
-
   try {
-    const order = await Order.findById(orderId);
-    if (!order || order.userId.toString() !== req.user.id) {
-      return res.status(401).json({ msg: "Unauthorized" });
+    let feedback = await Rating.findOne({ orderId });
+
+    // FIX: If the user clicks "Later" (rating 0) but it's already rated, just return success
+    if (rating === 0 && feedback && feedback.isSubmitted) {
+      return res.json({ msg: "Already rated, ignoring dismiss." });
     }
 
-    const existingRating = await Rating.findOne({ orderId });
-    if (existingRating) {
-      return res.status(400).json({ msg: "Already rated." });
+    // Block updating an actual review once submitted
+    if (feedback && feedback.isSubmitted) {
+      return res
+        .status(400)
+        .json({ msg: "Feedback already submitted for this order." });
     }
 
-    const newRating = new Rating({
+    const ratingData = {
       userId: req.user.id,
       orderId,
       rating,
       comment: comment || "",
-    });
+      isSubmitted: rating > 0,
+    };
 
-    await newRating.save();
-    res.json({ msg: "Feedback submitted." });
+    if (feedback) {
+      feedback = await Rating.findOneAndUpdate(
+        { orderId },
+        { $set: ratingData },
+        { new: true },
+      );
+    } else {
+      feedback = new Rating(ratingData);
+      await feedback.save();
+    }
+
+    res.json(feedback);
   } catch (err) {
-    if (err.code === 11000)
-      return res.status(400).json({ msg: "Already processed." });
+    res.status(500).send("Server Error");
+  }
+});
+
+/**
+ * @route   GET api/rating/admin/all
+ * @desc    Get all submitted feedback (Owner only)
+ */
+router.get("/admin/all", [auth, admin], async (req, res) => {
+  try {
+    const feedbackList = await Rating.find({ isSubmitted: true })
+      .populate("userId", "name email mobile")
+      .populate({
+        path: "orderId",
+        select: "orderNumber orderType totalAmount",
+      })
+      .sort({ createdAt: -1 });
+
+    res.json(feedbackList);
+  } catch (err) {
     res.status(500).send("Server Error");
   }
 });
