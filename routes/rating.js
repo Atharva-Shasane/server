@@ -4,6 +4,7 @@ const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 const Rating = require("../models/Rating");
 const Order = require("../models/Order");
+const axios = require("axios");
 
 /**
  * @route   GET api/rating/check-pending
@@ -73,6 +74,23 @@ router.post("/", auth, async (req, res) => {
     } else {
       feedback = new Rating(ratingData);
       await feedback.save();
+    }
+    
+// pdate Average Ratings in MenuItems ---
+    // Only trigger if feedback was actually submitted (rating > 0)
+    if (rating > 0 && dishRatings && dishRatings.length > 0) {
+      // Loop through each dish that was rated by User 1
+      for (const dish of dishRatings) {
+        try {
+          // Tell the Python AIML server to recalculate the ceiling average for this dish
+          await axios.post("http://localhost:8000/aiml/update-rating", {
+            dishId: dish.menuItemId
+          });
+        } catch (aimlErr) {
+          console.error("AIML Sync Error: Could not update average for dish", dish.menuItemId);
+          // We don't block the response even if the AIML update fails
+        }
+      }
     }
 
     res.json(feedback);

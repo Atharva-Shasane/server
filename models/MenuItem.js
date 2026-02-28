@@ -40,6 +40,9 @@ const MenuItemSchema = new Schema({
     type: Boolean,
     default: true,
   },
+  averageRating: { type: Number, default: 0 }, 
+  totalReviews: { type: Number, default: 0 
+  },
   imageUrl: {
     type: String,
     required: true,
