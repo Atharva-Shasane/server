@@ -8,13 +8,17 @@ const auth = require("../middleware/auth");
 
 /**
  * Helper: Send Email via Resend API
+ * SECURITY FIX: Removed sensitive OTP logging to console.
  */
 async function sendOTPEmail(email, otp) {
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
   if (!RESEND_API_KEY) {
-    console.error("❌ [AUTH ERROR] RESEND_API_KEY is missing in .env file.");
-    console.log(`[FALLBACK OTP] Code for ${email}: ${otp}`);
+    console.error("X [AUTH ERROR] RESEND_API_KEY is missing in .env file.");
+    // In dev environment, we might want to see the code if email is not configured
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[DEV MODE] OTP for ${email}: ${otp}`);
+    }
     return;
   }
 
@@ -43,18 +47,17 @@ async function sendOTPEmail(email, otp) {
     });
 
     const data = await response.json();
-
     if (!response.ok) {
-      console.error("❌ [RESEND API ERROR]:", data);
+      console.error("X [RESEND API ERROR]:", data);
       throw new Error(data.message || "Failed to send email");
     }
-
-    console.log(
-      `✅ [AUTH] Email sent successfully to ${email}. ID: ${data.id}`,
-    );
+    console.log(`[AUTH] Email sent successfully to ${email}. ID: ${data.id}`);
   } catch (error) {
-    console.error("❌ [EMAIL SYSTEM FAILURE]:", error.message);
-    console.log(`[EMERGENCY OTP LOG] Code for ${email}: ${otp}`);
+    console.error("X [EMAIL SYSTEM FAILURE]:", error.message);
+    // In production, we never log the OTP to the console.
+    if (process.env.NODE_ENV !== "production") {
+      console.log(`[DEV EMERGENCY LOG] OTP for ${email}: ${otp}`);
+    }
   }
 }
 
@@ -67,16 +70,14 @@ const isPasswordStrong = (pwd) => {
 };
 
 /**
- * @route POST api/auth/request-otp
- * @desc Request OTP for registration or owner login
+ * @route   POST api/auth/request-otp
+ * @desc    Request OTP for registration or owner login
  */
 router.post("/request-otp", async (req, res) => {
   const { email } = req.body;
-
   if (!email) return res.status(400).json({ msg: "Email is required" });
 
   const otp = generateOTP();
-
   try {
     await Otp.findOneAndUpdate(
       { email: email.toLowerCase() },
@@ -85,7 +86,6 @@ router.post("/request-otp", async (req, res) => {
     );
 
     await sendOTPEmail(email.toLowerCase(), otp);
-
     res.json({ msg: "Verification code sent to your email." });
   } catch (err) {
     console.error(err.message);
@@ -94,8 +94,8 @@ router.post("/request-otp", async (req, res) => {
 });
 
 /**
- * @route POST api/auth/register
- * @desc Register a new user (Requires OTP)
+ * @route   POST api/auth/register
+ * @desc    Register a new user (Requires OTP)
  */
 router.post("/register", async (req, res) => {
   const { name, email, mobile, password, otp } = req.body;
@@ -107,21 +107,19 @@ router.post("/register", async (req, res) => {
   }
 
   const storedOtp = await Otp.findOne({ email: email.toLowerCase() });
-
-  if (!storedOtp)
+  if (!storedOtp) {
     return res.status(400).json({ msg: "OTP expired or not requested." });
+  }
 
   if (storedOtp.otp !== otp) {
     storedOtp.attempts += 1;
     await storedOtp.save();
-
     if (storedOtp.attempts >= 3) {
       await Otp.deleteOne({ _id: storedOtp._id });
       return res
         .status(400)
         .json({ msg: "Too many failed attempts. Please request a new code." });
     }
-
     return res
       .status(400)
       .json({
@@ -143,20 +141,19 @@ router.post("/register", async (req, res) => {
 
     const salt = await bcrypt.genSalt(10);
     user.passwordHash = await bcrypt.hash(password, salt);
-
     await user.save();
     await Otp.deleteOne({ email: email.toLowerCase() });
 
     const payload = { user: { id: user.id, role: user.role } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
-      expiresIn: "1h", // JWT expires in 1 hour
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "1h",
     });
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Lax",
-      maxAge: 1 * 60 * 60 * 1000, // Cookie expires in 1 hour (3600000 ms)
+      maxAge: 3600000,
     });
 
     res.json({
@@ -174,8 +171,7 @@ router.post("/register", async (req, res) => {
 });
 
 /**
- * @route POST api/auth/login
- * @desc Authenticate user.
+ * @route   POST api/auth/login
  */
 router.post("/login", async (req, res) => {
   const { email, password, otp } = req.body;
@@ -207,7 +203,6 @@ router.post("/login", async (req, res) => {
       if (!storedOtp || storedOtp.otp !== otp) {
         return res.status(400).json({ msg: "Invalid or expired OTP" });
       }
-
       await Otp.deleteOne({ email: email.toLowerCase() });
     }
 
@@ -215,15 +210,15 @@ router.post("/login", async (req, res) => {
     await user.save();
 
     const payload = { user: { id: user.id, role: user.role } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
-      expiresIn: "1h", // JWT expires in 1 hour
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
+      expiresIn: "1h",
     });
 
     res.cookie("token", token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
       sameSite: "Lax",
-      maxAge: 1 * 60 * 60 * 1000, // Cookie expires in 1 hour
+      maxAge: 3600000,
     });
 
     res.json({
@@ -240,17 +235,11 @@ router.post("/login", async (req, res) => {
   }
 });
 
-/**
- * @route POST api/auth/logout
- */
 router.post("/logout", (req, res) => {
   res.clearCookie("token");
   res.json({ msg: "Logged out successfully" });
 });
 
-/**
- * @route GET api/auth/me
- */
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-passwordHash");
