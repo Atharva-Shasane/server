@@ -10,31 +10,22 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// --- SECURITY MIDDLEWARE ---
-/**
- * Helmet helps secure the app by setting various HTTP headers.
- * mongoSanitize prevents NoSQL injection attacks by stripping out keys starting with '$'.
- */
+// --- SECURITY & MIDDLEWARE ---
 app.use(helmet());
 app.use(cookieParser());
 app.use(mongoSanitize());
 
-// INCREASED RATE LIMIT FOR DEVELOPMENT:
-// Prevents brute-force attacks and excessive automated requests.
+// RATE LIMITER (Adjusted for high development traffic)
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 1000, // Limit each IP to 1000 requests per windowMs
+  windowMs: 15 * 60 * 1000,
+  max: 2000,
   standardHeaders: true,
   legacyHeaders: false,
-  message: {
-    msg: "Too many requests from this IP, please try again after 15 minutes.",
-  },
+  message: { msg: "Too many requests, please try again later." },
 });
-
 app.use("/api/", limiter);
 
-// REFINED CORS CONFIGURATION
-// Configured to allow cross-origin requests from the Angular frontend specifically.
+// CORS CONFIGURATION
 app.use(
   cors({
     origin: "http://localhost:4200",
@@ -44,42 +35,38 @@ app.use(
   }),
 );
 
-/** --- BODY PARSING MIDDLEWARE ---
- * These lines allow the server to read the 'req.body'
- * from your Analytics expense form and other POST requests.
- */
+// BODY PARSING
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- DEBUGGING MIDDLEWARE ---
+// LOGGING
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
 });
 
-// --- DATABASE CONNECTION ---
+// DATABASE CONNECTION
 mongoose
   .connect(process.env.MONGO_URI || "mongodb://localhost:27017/Killa_db")
   .then(() => console.log("✅ MongoDB Connected"))
   .catch((err) => console.error("❌ DB Error:", err));
 
-// --- ROUTES ---
+// --- API ROUTES ---
 app.use("/api/auth", require("./routes/auth"));
 app.use("/api/menu", require("./routes/menu"));
 app.use("/api/orders", require("./routes/orders"));
 app.use("/api/analytics", require("./routes/analytics"));
 
-// MOUNTING THE NEW RATING SYSTEM
-// Handles user feedback, ratings, and feedback-to-order associations.
+// MOUNTING THE FEEDBACK SYSTEM (Crucial for fixing 404 errors)
 app.use("/api/rating", require("./routes/rating"));
 
-app.get("/", (req, res) => res.send("Killa Restaurant API Running 🚀"));
+app.get("/", (req, res) => res.send("Killa Resto API Active 🚀"));
 
-// Error handling for undefined routes
+// CATCH-ALL 404
 app.use((req, res) => {
-  res.status(404).json({ msg: "Route not found" });
+  res.status(404).json({ msg: "Endpoint not found on this server." });
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🚀 Killa Backend running on port ${PORT}`);
 });

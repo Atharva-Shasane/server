@@ -2,9 +2,8 @@ const mongoose = require("mongoose");
 const { Schema } = mongoose;
 
 /**
- * Enhanced Rating Schema
- * Strictly linked to OrderId to prevent duplicate feedback.
- * Includes isSubmitted flag to track completion.
+ * Advanced Granular Rating Schema
+ * Linked to OrderId with support for Dish-Level feedback and AI Sentiment.
  */
 const RatingSchema = new Schema({
   userId: {
@@ -16,22 +15,42 @@ const RatingSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "Order",
     required: true,
-    unique: true, // Prevents multiple feedback entries for the same order
+    unique: true,
   },
+  // Overall experience score (1-5)
   rating: {
     type: Number,
     required: true,
-    min: 0, // 0 indicates the user dismissed the prompt
+    min: 0,
     max: 5,
   },
+  // NEW: Individual dish ratings for the AIML discovery engine
+  dishRatings: [
+    {
+      menuItemId: { type: Schema.Types.ObjectId, ref: "MenuItem" },
+      name: String,
+      rating: { type: Number, min: 1, max: 5 },
+    },
+  ],
   comment: {
     type: String,
     maxlength: 500,
     default: "",
   },
+  // NEW: Owner Response capability
+  ownerReply: {
+    type: String,
+    maxlength: 500,
+    default: "",
+  },
+  // AI field populated by Python microservice (-1.0 to 1.0)
+  sentimentScore: {
+    type: Number,
+    default: 0,
+  },
   isSubmitted: {
     type: Boolean,
-    default: false, // False if user chose "Later" or dismissed
+    default: false,
   },
   createdAt: {
     type: Date,
@@ -39,7 +58,6 @@ const RatingSchema = new Schema({
   },
 });
 
-// Unique index to ensure one rating per order
 RatingSchema.index({ orderId: 1 }, { unique: true });
 
 module.exports = mongoose.model("Rating", RatingSchema);

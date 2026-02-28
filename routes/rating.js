@@ -7,7 +7,7 @@ const Order = require("../models/Order");
 
 /**
  * @route   GET api/rating/check-pending
- * @desc    Check for latest unrated completed order
+ * @desc    Check for the latest completed order without a submitted rating
  */
 router.get("/check-pending", auth, async (req, res) => {
   try {
@@ -20,8 +20,7 @@ router.get("/check-pending", auth, async (req, res) => {
 
     const existingRating = await Rating.findOne({ orderId: lastOrder._id });
 
-    // If a record exists AND it was submitted, it's not pending.
-    // If it exists but wasn't submitted (rating 0), it's also not pending (user said 'Later')
+    // User already provided feedback or chose 'Later' (isSubmitted: false records prevent re-prompting on home)
     if (existingRating) return res.json({ pending: false });
 
     res.json({
@@ -40,24 +39,20 @@ router.get("/check-pending", auth, async (req, res) => {
 
 /**
  * @route   POST api/rating
- * @desc    Submit or update feedback for an order
+ * @desc    Submit granular dish and order feedback
  */
 router.post("/", auth, async (req, res) => {
-  const { orderId, rating, comment } = req.body;
+  const { orderId, rating, comment, dishRatings } = req.body;
 
   try {
     let feedback = await Rating.findOne({ orderId });
 
-    // FIX: If the user clicks "Later" (rating 0) but it's already rated, just return success
     if (rating === 0 && feedback && feedback.isSubmitted) {
-      return res.json({ msg: "Already rated, ignoring dismiss." });
+      return res.json({ msg: "Ignoring dismiss on existing record." });
     }
 
-    // Block updating an actual review once submitted
     if (feedback && feedback.isSubmitted) {
-      return res
-        .status(400)
-        .json({ msg: "Feedback already submitted for this order." });
+      return res.status(400).json({ msg: "Feedback already submitted." });
     }
 
     const ratingData = {
@@ -65,6 +60,7 @@ router.post("/", auth, async (req, res) => {
       orderId,
       rating,
       comment: comment || "",
+      dishRatings: dishRatings || [],
       isSubmitted: rating > 0,
     };
 
@@ -86,8 +82,28 @@ router.post("/", auth, async (req, res) => {
 });
 
 /**
+ * @route   PUT api/rating/admin/reply/:id
+ * @desc    Owner: Respond to customer review
+ */
+router.put("/admin/reply/:id", [auth, admin], async (req, res) => {
+  try {
+    const { reply } = req.body;
+    const feedback = await Rating.findByIdAndUpdate(
+      req.params.id,
+      { $set: { ownerReply: reply } },
+      { new: true },
+    );
+
+    if (!feedback) return res.status(404).json({ msg: "Record not found" });
+    res.json(feedback);
+  } catch (err) {
+    res.status(500).send("Server Error");
+  }
+});
+
+/**
  * @route   GET api/rating/admin/all
- * @desc    Get all submitted feedback (Owner only)
+ * @desc    Fetch all reviews for Admin dashboard
  */
 router.get("/admin/all", [auth, admin], async (req, res) => {
   try {
@@ -95,7 +111,7 @@ router.get("/admin/all", [auth, admin], async (req, res) => {
       .populate("userId", "name email mobile")
       .populate({
         path: "orderId",
-        select: "orderNumber orderType totalAmount",
+        select: "orderNumber totalAmount items createdAt",
       })
       .sort({ createdAt: -1 });
 
