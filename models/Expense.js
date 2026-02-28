@@ -2,7 +2,7 @@ const mongoose = require('mongoose');
 
 /**
  * Expense Schema
- * Tracks manual business costs like Rent, Utilities, and Supplies
+ * Tracks business costs with specific Month and Year support
  */
 const ExpenseSchema = new mongoose.Schema({
   description: { 
@@ -13,13 +13,24 @@ const ExpenseSchema = new mongoose.Schema({
     type: Number, 
     required: true 
   },
+  date: { 
+    type: Date, 
+    required: true 
+  },
+  // Category is no longer required to prevent validation errors
   category: { 
+    type: String, 
+    required: false,
+    default: 'General' 
+  }, 
+  // New fields to match frontend logic
+  month: { 
     type: String, 
     required: true 
   },
-  date: { 
-    type: Date, 
-    default: Date.now 
+  year: { 
+    type: Number, 
+    required: true 
   }
 });
 

@@ -4,48 +4,86 @@ const Order = require('../models/Order');
 const Expense = require('../models/Expense');
 
 /**
+ * @route   POST /api/analytics/expenses
+ * @desc    Add a manual business expense
+ */
+router.post('/expenses', async (req, res) => {
+  try {
+    const { description, amount, month, year } = req.body;
+    const monthNames = ["January", "February", "March", "April", "May", "June", 
+                        "July", "August", "September", "October", "November", "December"];
+    const monthIndex = monthNames.indexOf(month);
+    const expenseDate = new Date(year, monthIndex, 1);
+
+    const newExpense = new Expense({
+      description,
+      amount: Number(amount),
+      date: expenseDate,
+      month,
+      year,
+      category: "General" 
+    });
+
+    await newExpense.save();
+    res.status(201).json({ msg: "Expense Added Successfully" });
+  } catch (err) {
+    res.status(500).json({ msg: "Failed to add expense" });
+  }
+});
+
+/**
  * @route   GET /api/analytics/profit-loss-annual
- * @desc    Get monthly revenue vs expenses for a specific year
+ * @desc    Fixed logic to include "N/A" (Legacy) data in the graph
  */
 router.get('/profit-loss-annual', async (req, res) => {
   try {
-    // Get year from query, default to current year if not provided
     const year = parseInt(req.query.year) || new Date().getFullYear();
+    const monthNames = ["January", "February", "March", "April", "May", "June", 
+                        "July", "August", "September", "October", "November", "December"];
 
-    // 1. Aggregate Revenue from the Orders collection using scheduledTime
+    // 1. Revenue aggregation
+    const startOfYear = new Date(`${year}-01-01T00:00:00.000Z`);
+    const endOfYear = new Date(`${year}-12-31T23:59:59.999Z`);
+
     const revenueData = await Order.aggregate([
       { 
-        $project: { 
-          year: { $year: "$scheduledTime" }, 
-          month: { $month: "$scheduledTime" }, 
-          totalAmount: 1,
-          orderStatus: 1
+        $match: { 
+          orderStatus: "COMPLETED",
+          scheduledTime: { $gte: startOfYear, $lte: endOfYear }
         } 
       },
-      { $match: { year: year, orderStatus: "COMPLETED" } }, // Only count completed orders
-      { $group: { _id: "$month", revenue: { $sum: "$totalAmount" } } }
-    ]);
-
-    // 2. Aggregate Expenses
-    const expenseData = await Expense.aggregate([
       { 
-        $project: { 
-          year: { $year: "$date" }, 
-          month: { $month: "$date" }, 
-          amount: 1 
+        $group: { 
+          _id: { $month: "$scheduledTime" }, 
+          revenue: { $sum: "$totalAmount" } 
         } 
-      },
-      { $match: { year: year } },
-      { $group: { _id: "$month", expenses: { $sum: "$amount" } } }
+      }
     ]);
 
-    // 3. Map to 12-month report
-    const monthlyReport = Array.from({ length: 12 }, (_, i) => {
-      const monthNum = i + 1;
+    // 2. Optimized Expense Fetching (Gets both new records and legacy N/A records)
+    const expenses = await Expense.find({
+      $or: [
+        { year: year },
+        { date: { $gte: startOfYear, $lte: endOfYear } }
+      ]
+    });
+
+    // 3. Mapping
+    const monthlyReport = monthNames.map((mName, index) => {
+      const monthNum = index + 1;
       const rev = revenueData.find(r => r._id === monthNum)?.revenue || 0;
-      const exp = expenseData.find(e => e._id === monthNum)?.expenses || 0;
+      
+      // Check both the month string OR the date object for a match
+      const exp = expenses
+        .filter(e => {
+            const matchesString = e.month === mName;
+            const matchesDate = e.date && new Date(e.date).getMonth() === index && new Date(e.date).getFullYear() === year;
+            return matchesString || matchesDate;
+        })
+        .reduce((sum, current) => sum + current.amount, 0);
+
       return {
-        month: new Date(0, i).toLocaleString('default', { month: 'short' }),
+        month: mName.substring(0, 3).toUpperCase(),
         revenue: rev,
         expenses: exp,
         profit: rev - exp
@@ -54,25 +92,20 @@ router.get('/profit-loss-annual', async (req, res) => {
 
     res.json(monthlyReport);
   } catch (err) { 
-    console.error("Aggregation Error:", err);
     res.status(500).json({ msg: "Server Error" }); 
   }
 });
 
 /**
  * @route   GET /api/analytics/today
- * @desc    Calculates KPIs for the current calendar day
  */
 router.get('/today', async (req, res) => {
   try {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
-
-    const endOfDay = new Date();
-    endOfDay.setHours(23, 59, 59, 999);
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    const end = new Date(); end.setHours(23, 59, 59, 999);
 
     const todayOrders = await Order.find({
-      scheduledTime: { $gte: startOfDay, $lte: endOfDay },
+      scheduledTime: { $gte: start, $lte: end },
       orderStatus: "COMPLETED"
     });
 
@@ -90,17 +123,10 @@ router.get('/today', async (req, res) => {
 
 /**
  * @route   GET /api/analytics/expenses/list
- * @desc    Get all manual expenses for the current year
  */
 router.get('/expenses/list', async (req, res) => {
   try {
-    const year = new Date().getFullYear();
-    const expenses = await Expense.find({
-      date: { 
-        $gte: new Date(`${year}-01-01`), 
-        $lte: new Date(`${year}-12-31`) 
-      }
-    }).sort({ date: -1 });
+    const expenses = await Expense.find().sort({ date: -1 });
     res.json(expenses);
   } catch (err) {
     res.status(500).json({ msg: "Server Error" });
@@ -108,15 +134,30 @@ router.get('/expenses/list', async (req, res) => {
 });
 
 /**
+ * @route   DELETE /api/analytics/expenses/:id
+ */
+router.delete('/expenses/:id', async (req, res) => {
+  try {
+    const deleted = await Expense.findByIdAndDelete(req.params.id);
+    if (!deleted) return res.status(404).json({ msg: "Not found" });
+    res.json({ msg: "Deleted successfully" });
+  } catch (err) {
+    res.status(500).json({ msg: "Delete failed" });
+  }
+});
+
+/**
  * @route   PUT /api/analytics/expenses/:id
- * @desc    Update an existing expense
  */
 router.put('/expenses/:id', async (req, res) => {
   try {
-    const { description, amount, category } = req.body;
+    const { description, amount, month, year } = req.body;
+    const monthNames = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+    const expenseDate = new Date(year, monthNames.indexOf(month), 1);
+
     const updatedExpense = await Expense.findByIdAndUpdate(
       req.params.id,
-      { description, amount: Number(amount), category },
+      { description, amount: Number(amount), month, year, date: expenseDate },
       { new: true }
     );
     res.json({ msg: "Updated successfully", data: updatedExpense });
@@ -127,14 +168,11 @@ router.put('/expenses/:id', async (req, res) => {
 
 /**
  * @route   GET /api/analytics/payment-comparison
- * @desc    Get daily online vs offline payment totals for a specific month and year
  */
 router.get('/payment-comparison', async (req, res) => {
   try {
-    // Dynamic year and month support
     const month = parseInt(req.query.month) || new Date().getMonth() + 1;
     const year = parseInt(req.query.year) || new Date().getFullYear();
-
     const startOfMonth = new Date(year, month - 1, 1);
     const endOfMonth = new Date(year, month, 0, 23, 59, 59);
 
@@ -147,10 +185,7 @@ router.get('/payment-comparison', async (req, res) => {
       },
       {
         $group: {
-          _id: { 
-            day: { $dayOfMonth: "$scheduledTime" }, 
-            method: "$paymentMethod" 
-          },
+          _id: { day: { $dayOfMonth: "$scheduledTime" }, method: { $toUpper: "$paymentMethod" } },
           totalAmount: { $sum: "$totalAmount" },
           count: { $sum: 1 }
         }
@@ -158,12 +193,7 @@ router.get('/payment-comparison', async (req, res) => {
     ]);
 
     const daysInMonth = new Date(year, month, 0).getDate();
-    const dailyStats = Array.from({ length: daysInMonth }, (_, i) => ({
-      day: i + 1,
-      online: 0,
-      offline: 0
-    }));
-
+    const dailyStats = Array.from({ length: daysInMonth }, (_, i) => ({ day: i + 1, online: 0, offline: 0 }));
     let totalOnlineCount = 0;
     let totalOfflineCount = 0;
 
@@ -180,7 +210,6 @@ router.get('/payment-comparison', async (req, res) => {
 
     res.json({ dailyStats, totalOnlineCount, totalOfflineCount });
   } catch (err) {
-    console.error("Payment Comparison Error:", err);
     res.status(500).json({ msg: "Server Error" });
   }
 });
