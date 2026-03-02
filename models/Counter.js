@@ -4,6 +4,7 @@ const CounterSchema = new mongoose.Schema({
   id: {
     type: String,
     required: true,
+    unique: true,
   },
   seq: {
     type: Number,
