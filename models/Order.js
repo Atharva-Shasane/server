@@ -1,10 +1,6 @@
 const mongoose = require("mongoose");
 const Schema = mongoose.Schema;
 
-/**
- * Order Schema
- * Updated to fix enum mismatch (DINE_IN) and support kitchen instructions.
- */
 const OrderSchema = new Schema({
   userId: {
     type: Schema.Types.ObjectId,
@@ -17,26 +13,19 @@ const OrderSchema = new Schema({
   },
   orderType: {
     type: String,
-    enum: ["DINE_IN", "TAKEAWAY"], // Matches frontend 'DINE_IN'
+    enum: ["DINE IN", "TAKEAWAY"],
     required: true,
   },
-  tableNumber: {
+  tableNumbers: [{
     type: Number,
-    required: false,
-  },
+  }],
   numberOfPeople: {
     type: Number,
-    validate: {
-      validator: function (v) {
-        // Updated validator to check for DINE_IN
-        return this.orderType === "DINE_IN" ? v != null && v > 0 : true;
-      },
-      message: "Number of people is required for Dine-in orders.",
-    },
-    default: 0,
+    default: 1,
   },
   scheduledTime: {
     type: Date,
+    required: true,
   },
   items: [
     {
@@ -45,7 +34,14 @@ const OrderSchema = new Schema({
         ref: "MenuItem",
         required: true,
       },
-      name: String,
+      name: {
+        type: String,
+        required: true
+      },
+      category: {
+        type: String,
+        required: true 
+      },
       quantity: {
         type: Number,
         required: true,
@@ -57,10 +53,8 @@ const OrderSchema = new Schema({
       },
       variant: {
         type: String,
-        enum: ["SINGLE", "HALF", "FULL"],
         default: "SINGLE",
       },
-      // Special instructions from the customer
       instructions: {
         type: String,
         default: "",
@@ -76,12 +70,9 @@ const OrderSchema = new Schema({
     enum: ["CASH", "ONLINE"],
     required: true,
   },
-  paymentId: {
-    type: Schema.Types.ObjectId,
-    ref: "Payment",
-  },
   transactionId: {
     type: String,
+    default: "",
   },
   paymentStatus: {
     type: String,
@@ -101,6 +92,11 @@ const OrderSchema = new Schema({
     type: Date,
     default: Date.now,
   },
+});
+
+OrderSchema.pre("save", function (next) {
+  this.updatedAt = Date.now();
+  next();
 });
 
 module.exports = mongoose.model("Order", OrderSchema);
