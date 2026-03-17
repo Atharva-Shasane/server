@@ -11,14 +11,17 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 
 // --- SECURITY & MIDDLEWARE ---
+// Helmet helps secure Express apps by setting various HTTP headers
 app.use(helmet());
+// cookieParser is required to read JWT tokens from cookies
 app.use(cookieParser());
+// mongoSanitize prevents NoSQL injection attacks
 app.use(mongoSanitize());
 
 // RATE LIMITER (Adjusted for high development traffic)
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 2000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 2000, // Limit each IP to 2000 requests per windowMs
   standardHeaders: true,
   legacyHeaders: false,
   message: { msg: "Too many requests, please try again later." },
@@ -26,12 +29,13 @@ const limiter = rateLimit({
 app.use("/api/", limiter);
 
 // CORS CONFIGURATION
+// origin must match your Angular development server (usually localhost:4200)
 app.use(
   cors({
     origin: "http://localhost:4200",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "x-auth-token", "Authorization"],
-    credentials: true,
+    credentials: true, // Crucial for allowing cookies to be sent across origins
   }),
 );
 
@@ -39,7 +43,7 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// LOGGING
+// LOGGING MIDDLEWARE
 app.use((req, res, next) => {
   console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
   next();
@@ -57,16 +61,18 @@ app.use("/api/menu", require("./routes/menu"));
 app.use("/api/orders", require("./routes/orders"));
 app.use("/api/analytics", require("./routes/analytics"));
 
-// MOUNTING THE FEEDBACK SYSTEM (Crucial for fixing 404 errors)
+// MOUNTING THE FEEDBACK SYSTEM (Crucial for fixing 404 errors in the rating component)
 app.use("/api/rating", require("./routes/rating"));
 
+// Health Check Route
 app.get("/", (req, res) => res.send("Killa Resto API Active 🚀"));
 
-// CATCH-ALL 404
+// CATCH-ALL 404 for undefined routes
 app.use((req, res) => {
   res.status(404).json({ msg: "Endpoint not found on this server." });
 });
 
+// Start Server
 app.listen(PORT, () => {
   console.log(`🚀 Killa Backend running on port ${PORT}`);
 });
