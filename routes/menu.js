@@ -24,13 +24,19 @@ router.post("/recommendations", async (req, res) => {
     const { userId } = req.body;
     let pythonResponse;
 
+    // Use environment variable for the URL to support Render hosting.
+    // Ensure RECOMMENDER_URL is set to https://killa-aiml.onrender.com/aiml/recommend in Render dashboard.
+    const AIML_URL =
+      process.env.RECOMMENDER_URL || "http://localhost:8000/aiml/recommend";
+
     try {
       pythonResponse = await axios.post(
-        "http://localhost:8000/aiml/recommend",
+        AIML_URL,
         { userId: userId || null },
-        { timeout: 3000 }
+        { timeout: 5000 }, // Increased timeout slightly for cold starts on Render
       );
     } catch (aiErr) {
+      // Fallback if AI service is down or slow
       const popularityFallback = await MenuItem.find({
         isAvailable: true,
         category: { $ne: "drinks" },
@@ -67,7 +73,9 @@ router.post("/recommendations", async (req, res) => {
 router.post("/", [auth, admin, upload.single("image")], async (req, res) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ msg: "Please upload an image for the dish." });
+      return res
+        .status(400)
+        .json({ msg: "Please upload an image for the dish." });
     }
 
     const menuData = { ...req.body };
@@ -101,7 +109,7 @@ router.put("/:id", [auth, admin, upload.single("image")], async (req, res) => {
     const item = await MenuItem.findByIdAndUpdate(
       req.params.id,
       { $set: updateData },
-      { new: true }
+      { new: true },
     );
 
     if (!item) return res.status(404).json({ msg: "Item not found" });
