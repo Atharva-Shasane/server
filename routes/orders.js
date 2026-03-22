@@ -41,7 +41,7 @@ router.get("/my-orders", auth, async (req, res) => {
 /**
  * @route POST api/orders
  * @desc Create a new order. 
- * Includes safety checks for user session and explicit logging for debugging 500 errors.
+ * FIX: Added 'scheduledTime' and 'orderType' to satisfy Mongoose validation requirements.
  */
 router.post("/", auth, async (req, res) => {
   try {
@@ -58,6 +58,9 @@ router.post("/", auth, async (req, res) => {
     const lastOrder = await Order.findOne().sort({ createdAt: -1 });
     const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
 
+    // Mapping diningStyle to orderType to satisfy the required field in Schema
+    const orderType = diningStyle || 'DINE_IN';
+
     const newOrder = new Order({
       userId: req.user.id,
       orderNumber,
@@ -66,15 +69,18 @@ router.post("/", auth, async (req, res) => {
       paymentMethod,
       tableNumber,
       diningStyle,
+      orderType: orderType, // MANDATORY FIELD
+      scheduledTime: new Date(), // MANDATORY FIELD
       orderStatus: "NEW",
       paymentStatus: paymentMethod === "CASH" ? "PENDING" : "COMPLETED",
-      createdAt: new Date() // Server stores UTC, Frontend converts to local IST
+      createdAt: new Date()
     });
 
     const savedOrder = await newOrder.save();
     console.log(`✅ [ORDER SUCCESS]: #${orderNumber} placed by user ${req.user.id}`);
     res.json(savedOrder);
   } catch (err) {
+    // This captures the error that caused the 500 status previously
     console.error("❌ [ORDER PLACEMENT FAILED]:", err);
     res.status(500).json({ 
       msg: "Internal server error while processing order.", 
@@ -85,7 +91,6 @@ router.post("/", auth, async (req, res) => {
 
 /**
  * @route GET api/orders/owner/all
- * @desc Admin: Fetch all orders with user and feedback details
  */
 router.get("/owner/all", [auth, admin], async (req, res) => {
   try {
@@ -129,7 +134,6 @@ router.get("/owner/all", [auth, admin], async (req, res) => {
 
 /**
  * @route PUT api/orders/owner/:id/status
- * @desc Admin: Update order/payment status
  */
 router.put("/owner/:id/status", [auth, admin], async (req, res) => {
   try {
@@ -151,7 +155,6 @@ router.put("/owner/:id/status", [auth, admin], async (req, res) => {
 
 /**
  * @route PUT api/orders/:id/cancel
- * @desc User: Cancel order if still in NEW state
  */
 router.put("/:id/cancel", auth, async (req, res) => {
   try {
@@ -170,7 +173,6 @@ router.put("/:id/cancel", auth, async (req, res) => {
 
 /**
  * @route GET api/orders/status/volume
- * @desc UI Utility: Kitchen load calculation for the current shift (last 12 hours)
  */
 router.get("/status/volume", async (req, res) => {
   try {

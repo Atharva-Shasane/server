@@ -7,27 +7,26 @@ const admin = require("../middleware/admin");
 
 /**
  * Helper: Calculates start and end of day in IST (India Standard Time)
- * Render servers are UTC, so we adjust to Mumbai time (UTC + 5:30).
+ * Render servers are UTC. This adds 5.5 hours to align with Mumbai time.
  */
 const getISTTimeRange = () => {
   const now = new Date();
   const istOffset = 5.5 * 60 * 60 * 1000;
-
+  
   // Calculate current IST time
   const istNow = new Date(now.getTime() + istOffset);
   const startOfDayIST = new Date(istNow);
   startOfDayIST.setUTCHours(0, 0, 0, 0);
-
+  
   // Convert IST start of day back to UTC for MongoDB queries
   const start = new Date(startOfDayIST.getTime() - istOffset);
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000);
-
+  
   return { start, end };
 };
 
 /**
  * @route   POST /api/analytics/expenses
- * @desc    Add a manual business expense (Admin Only)
  */
 router.post("/expenses", [auth, admin], async (req, res) => {
   try {
@@ -58,7 +57,6 @@ router.post("/expenses", [auth, admin], async (req, res) => {
 
 /**
  * @route   GET /api/analytics/profit-loss-annual
- * @desc    Annual report including legacy "N/A" data and IST adjusted revenue
  */
 router.get("/profit-loss-annual", [auth, admin], async (req, res) => {
   try {
@@ -68,28 +66,27 @@ router.get("/profit-loss-annual", [auth, admin], async (req, res) => {
       "July", "August", "September", "October", "November", "December"
     ];
 
-    // Define UTC boundaries for the requested IST year
     const istOffset = 5.5 * 60 * 60 * 1000;
     const startOfYearUTC = new Date(Date.UTC(year, 0, 1, 0, 0, 0) - istOffset);
     const endOfYearUTC = new Date(Date.UTC(year, 11, 31, 23, 59, 59, 999) - istOffset);
 
-    // 1. Revenue aggregation using createdAt (aligned with orders.js)
+    // 1. Revenue aggregation using scheduledTime (standardizing on required field)
     const revenueData = await Order.aggregate([
       {
         $match: {
           orderStatus: "COMPLETED",
-          createdAt: { $gte: startOfYearUTC, $lte: endOfYearUTC }
+          scheduledTime: { $gte: startOfYearUTC, $lte: endOfYearUTC }
         }
       },
       {
         $group: {
-          _id: { $month: { $add: ["$createdAt", istOffset] } }, // Adjust month extraction to IST
+          _id: { $month: { $add: ["$scheduledTime", istOffset] } },
           revenue: { $sum: "$totalAmount" }
         }
       }
     ]);
 
-    // 2. Fetch expenses (Legacy month strings + Date objects)
+    // 2. Fetch expenses
     const expenses = await Expense.find({
       $or: [
         { year: year },
@@ -129,7 +126,6 @@ router.get("/profit-loss-annual", [auth, admin], async (req, res) => {
 
 /**
  * @route   GET /api/analytics/today
- * @desc    Today's stats adjusted for IST (Mumbai Time)
  */
 router.get("/today", [auth, admin], async (req, res) => {
   try {
@@ -138,7 +134,7 @@ router.get("/today", [auth, admin], async (req, res) => {
     const stats = await Order.aggregate([
       {
         $match: {
-          createdAt: { $gte: start, $lt: end },
+          scheduledTime: { $gte: start, $lt: end },
           orderStatus: "COMPLETED"
         }
       },
@@ -154,7 +150,6 @@ router.get("/today", [auth, admin], async (req, res) => {
 
     const result = stats[0] || { totalRevenue: 0, orderCount: 0, avgOrderValue: 0 };
     
-    // Rename fields to match frontend expectations
     res.json({
       totalOrders: result.orderCount,
       totalRevenue: result.totalRevenue,
@@ -213,7 +208,6 @@ router.put("/expenses/:id", [auth, admin], async (req, res) => {
 
 /**
  * @route   GET /api/analytics/payment-comparison
- * @desc    Compare Daily Revenue by Payment Method (IST Adjusted)
  */
 router.get("/payment-comparison", [auth, admin], async (req, res) => {
   try {
@@ -227,14 +221,14 @@ router.get("/payment-comparison", [auth, admin], async (req, res) => {
     const paymentData = await Order.aggregate([
       {
         $match: {
-          createdAt: { $gte: startOfMonthUTC, $lte: endOfMonthUTC },
+          scheduledTime: { $gte: startOfMonthUTC, $lte: endOfMonthUTC },
           orderStatus: "COMPLETED"
         }
       },
       {
         $group: {
           _id: { 
-            day: { $dayOfMonth: { $add: ["$createdAt", istOffset] } }, 
+            day: { $dayOfMonth: { $add: ["$scheduledTime", istOffset] } }, 
             method: { $toUpper: "$paymentMethod" } 
           },
           totalAmount: { $sum: "$totalAmount" },
