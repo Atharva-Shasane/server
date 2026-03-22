@@ -8,51 +8,52 @@ const admin = require("../middleware/admin");
 /**
  * @route GET api/orders/my-orders
  * @desc Fetch user orders including feedback and admin replies
- * Fixes the issue where "Rate Order" kept appearing after submission.
  */
 router.get("/my-orders", auth, async (req, res) => {
   try {
     const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    // We use aggregate to join 'orders' with the 'ratings' collection
     const orders = await Order.aggregate([
-      {
-        $match: { userId: userId },
-      },
-      {
-        $sort: { createdAt: -1 },
-      },
+      { $match: { userId: userId } },
+      { $sort: { createdAt: -1 } },
       {
         $lookup: {
-          from: "ratings", // The collection name for the Rating model
+          from: "ratings",
           localField: "_id",
           foreignField: "orderId",
-          as: "feedback",
-        },
+          as: "feedback"
+        }
       },
       {
         $addFields: {
-          // Since lookup returns an array, we take the first element
-          feedback: { $arrayElemAt: ["$feedback", 0] },
-        },
-      },
+          feedback: { $arrayElemAt: ["$feedback", 0] }
+        }
+      }
     ]);
 
     res.json(orders);
   } catch (err) {
-    console.error("Error fetching my-orders:", err.message);
-    res.status(500).send("Server Error");
+    console.error("❌ [MY-ORDERS FETCH ERROR]:", err.message);
+    res.status(500).json({ msg: "Failed to fetch orders" });
   }
 });
 
 /**
  * @route POST api/orders
- * @desc Create a new order
+ * @desc Create a new order. 
+ * Includes safety checks for user session and explicit logging for debugging 500 errors.
  */
 router.post("/", auth, async (req, res) => {
   try {
-    const { items, totalAmount, paymentMethod, tableNumber, diningStyle } =
-      req.body;
+    const { items, totalAmount, paymentMethod, tableNumber, diningStyle } = req.body;
+
+    if (!req.user || !req.user.id) {
+      return res.status(401).json({ msg: "Authentication context missing. Please re-login." });
+    }
+
+    if (!items || items.length === 0) {
+      return res.status(400).json({ msg: "No items provided in the order." });
+    }
 
     const lastOrder = await Order.findOne().sort({ createdAt: -1 });
     const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
@@ -67,12 +68,18 @@ router.post("/", auth, async (req, res) => {
       diningStyle,
       orderStatus: "NEW",
       paymentStatus: paymentMethod === "CASH" ? "PENDING" : "COMPLETED",
+      createdAt: new Date() // Server stores UTC, Frontend converts to local IST
     });
 
     const savedOrder = await newOrder.save();
+    console.log(`✅ [ORDER SUCCESS]: #${orderNumber} placed by user ${req.user.id}`);
     res.json(savedOrder);
   } catch (err) {
-    res.status(500).send("Order Creation Failed");
+    console.error("❌ [ORDER PLACEMENT FAILED]:", err);
+    res.status(500).json({ 
+      msg: "Internal server error while processing order.", 
+      error: err.message 
+    });
   }
 });
 
@@ -89,32 +96,33 @@ router.get("/owner/all", [auth, admin], async (req, res) => {
           from: "users",
           localField: "userId",
           foreignField: "_id",
-          as: "userDetails",
-        },
+          as: "userDetails"
+        }
       },
       {
         $lookup: {
           from: "ratings",
           localField: "_id",
           foreignField: "orderId",
-          as: "feedback",
-        },
+          as: "feedback"
+        }
       },
       {
         $addFields: {
           user: { $arrayElemAt: ["$userDetails", 0] },
-          feedback: { $arrayElemAt: ["$feedback", 0] },
-        },
+          feedback: { $arrayElemAt: ["$feedback", 0] }
+        }
       },
       {
         $project: {
           userDetails: 0,
-          "user.passwordHash": 0,
-        },
-      },
+          "user.passwordHash": 0
+        }
+      }
     ]);
     res.json(orders);
   } catch (err) {
+    console.error("❌ [ADMIN ORDERS FETCH FAILED]:", err.message);
     res.status(500).send("Server Error");
   }
 });
@@ -133,7 +141,7 @@ router.put("/owner/:id/status", [auth, admin], async (req, res) => {
     const order = await Order.findByIdAndUpdate(
       req.params.id,
       { $set: updateData },
-      { new: true },
+      { new: true }
     );
     res.json(order);
   } catch (err) {
@@ -149,10 +157,8 @@ router.put("/:id/cancel", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ msg: "Order not found" });
-    if (order.userId.toString() !== req.user.id)
-      return res.status(401).json({ msg: "Unauthorized" });
-    if (order.orderStatus !== "NEW")
-      return res.status(400).json({ msg: "Order already processing" });
+    if (order.userId.toString() !== req.user.id) return res.status(401).json({ msg: "Unauthorized" });
+    if (order.orderStatus !== "NEW") return res.status(400).json({ msg: "Order is already being prepared" });
 
     order.orderStatus = "CANCELLED";
     await order.save();
@@ -164,25 +170,27 @@ router.put("/:id/cancel", auth, async (req, res) => {
 
 /**
  * @route GET api/orders/status/volume
- * @desc UI Utility: Kitchen load calculation and occupied tables
+ * @desc UI Utility: Kitchen load calculation for the current shift (last 12 hours)
  */
 router.get("/status/volume", async (req, res) => {
   try {
+    const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
+
     const activeOrders = await Order.countDocuments({
       orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
+      createdAt: { $gte: twelveHoursAgo }
     });
-
+    
     const occupiedTables = await Order.distinct("tableNumber", {
       orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
-      tableNumber: { $exists: true },
+      tableNumber: { $exists: true }
     });
 
-    // Simple heuristic for estimated wait time
-    const waitTime = activeOrders * 8 + 5;
+    const waitTime = activeOrders * 8 + 5; 
 
     res.json({ activeOrders, waitTime, occupiedTables });
   } catch (err) {
-    res.status(500).send("Server Error");
+    res.status(500).json({ msg: "Server Error" });
   }
 });
 
