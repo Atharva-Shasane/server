@@ -6,7 +6,10 @@ const User = require("../models/User");
 const Otp = require("../models/Otp");
 const auth = require("../middleware/auth");
 
-// Helper: Send Email via Resend API
+/**
+ * Helper: Send Email via Resend API
+ * Logs specific API errors and provides an emergency console fallback.
+ */
 async function sendOTPEmail(email, otp) {
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
 
@@ -46,25 +49,36 @@ async function sendOTPEmail(email, otp) {
       throw new Error(data.message || "Failed to send email");
     }
 
-    // Success log (Optional, but helps confirm the flow)
     console.log(`[AUTH] Email sent successfully to ${email}. ID: ${data.id}`);
-
   } catch (error) {
     console.error("❌ [EMAIL SYSTEM FAILURE]:", error.message);
-    // Keep this emergency log so you can still log in if the API fails
+    // Keep this emergency log so you can still log in if the API fails or is restricted
     console.log(`[EMERGENCY OTP LOG] Code for ${email}: ${otp}`);
   }
 }
 
-const generateOTP = () => Math.floor(100000 + Math.random() * 900000).toString();
+const generateOTP = () =>
+  Math.floor(100000 + Math.random() * 900000).toString();
 
 const isPasswordStrong = (pwd) => {
-  const regex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
+  const regex =
+    /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/;
   return regex.test(pwd);
 };
 
-// @route POST api/auth/request-otp
-// @desc Request OTP for registration or owner login
+// Global Cookie Options for Local vs Production
+const isProduction = process.env.NODE_ENV === "production";
+const cookieOptions = {
+  httpOnly: true,
+  secure: isProduction, // Only true on HTTPS (Hosted)
+  sameSite: isProduction ? "None" : "Lax", // "None" required for cross-site cookies in Prod
+  maxAge: 24 * 60 * 60 * 1000, // 24 hours
+};
+
+/**
+ * @route POST api/auth/request-otp
+ * @desc Request OTP for registration or owner login
+ */
 router.post("/request-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ msg: "Email is required" });
@@ -75,7 +89,7 @@ router.post("/request-otp", async (req, res) => {
     await Otp.findOneAndUpdate(
       { email: email.toLowerCase() },
       { otp, attempts: 0, createdAt: new Date() },
-      { upsert: true, new: true }
+      { upsert: true, new: true },
     );
 
     await sendOTPEmail(email.toLowerCase(), otp);
@@ -85,27 +99,38 @@ router.post("/request-otp", async (req, res) => {
   }
 });
 
-// @route POST api/auth/register
-// @desc Register a new user (Requires OTP)
+/**
+ * @route POST api/auth/register
+ * @desc Register a new user (Requires OTP)
+ */
 router.post("/register", async (req, res) => {
   const { name, email, mobile, password, otp } = req.body;
 
   if (!isPasswordStrong(password)) {
-    return res.status(400).json({ msg: "Password does not meet security requirements" });
+    return res
+      .status(400)
+      .json({ msg: "Password does not meet security requirements" });
   }
 
   const storedOtp = await Otp.findOne({ email: email.toLowerCase() });
 
-  if (!storedOtp) return res.status(400).json({ msg: "OTP expired or not requested." });
+  if (!storedOtp)
+    return res.status(400).json({ msg: "OTP expired or not requested." });
 
   if (storedOtp.otp !== otp) {
     storedOtp.attempts += 1;
     await storedOtp.save();
     if (storedOtp.attempts >= 3) {
       await Otp.deleteOne({ _id: storedOtp._id });
-      return res.status(400).json({ msg: "Too many failed attempts. Please request a new code." });
+      return res
+        .status(400)
+        .json({ msg: "Too many failed attempts. Please request a new code." });
     }
-    return res.status(400).json({ msg: `Invalid OTP. ${3 - storedOtp.attempts} attempts remaining.` });
+    return res
+      .status(400)
+      .json({
+        msg: `Invalid OTP. ${3 - storedOtp.attempts} attempts remaining.`,
+      });
   }
 
   try {
@@ -131,12 +156,7 @@ router.post("/register", async (req, res) => {
       expiresIn: "24h",
     });
 
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false, // Set to true if using HTTPS
-      sameSite: "Lax",
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    res.cookie("token", token, cookieOptions);
 
     res.json({
       user: {
@@ -151,8 +171,10 @@ router.post("/register", async (req, res) => {
   }
 });
 
-// @route POST api/auth/login
-// @desc Authenticate user. 
+/**
+ * @route POST api/auth/login
+ * @desc Authenticate user. Handles dual-step verification for Owners.
+ */
 router.post("/login", async (req, res) => {
   const { email, password, otp } = req.body;
 
@@ -171,7 +193,7 @@ router.post("/login", async (req, res) => {
         await Otp.findOneAndUpdate(
           { email: email.toLowerCase() },
           { otp: newOtp, attempts: 0, createdAt: new Date() },
-          { upsert: true }
+          { upsert: true },
         );
         await sendOTPEmail(email.toLowerCase(), newOtp);
         return res.json({
@@ -195,12 +217,7 @@ router.post("/login", async (req, res) => {
       expiresIn: "24h",
     });
 
-    res.cookie("token", token, {
-      httpOnly: true,
-      secure: false,
-      sameSite: "Lax",
-      maxAge: 24 * 60 * 60 * 1000,
-    });
+    res.cookie("token", token, cookieOptions);
 
     res.json({
       user: {
@@ -215,13 +232,21 @@ router.post("/login", async (req, res) => {
   }
 });
 
-// @route POST api/auth/logout
+/**
+ * @route POST api/auth/logout
+ * @desc Clear authentication cookie. Fixes deprecation warning by removing maxAge.
+ */
 router.post("/logout", (req, res) => {
-  res.clearCookie("token");
+  // Remove maxAge from options as res.clearCookie handles expiration internally in Express 5.x patterns
+  const { maxAge, ...clearOptions } = cookieOptions;
+  res.clearCookie("token", clearOptions);
   res.json({ msg: "Logged out successfully" });
 });
 
-// @route GET api/auth/me
+/**
+ * @route GET api/auth/me
+ * @desc Get current logged-in user data from session cookie
+ */
 router.get("/me", auth, async (req, res) => {
   try {
     const user = await User.findById(req.user.id).select("-passwordHash");

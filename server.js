@@ -10,6 +10,14 @@ require("dotenv").config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Dynamic Origins for CORS
+// Add your hosted frontend URL to this array when you have it
+const allowedOrigins = [
+  "http://localhost:4200",
+  "http://127.0.0.1:4200",
+  process.env.FRONTEND_URL // This will be used in production
+];
+
 // SECURITY & MIDDLEWARE
 app.use(helmet());
 app.use(cookieParser());
@@ -25,13 +33,20 @@ const limiter = rateLimit({
 });
 app.use("/api/", limiter);
 
-// CORS CONFIGURATION
+// CORS CONFIGURATION (Dynamic for Local & Hosted)
 app.use(
   cors({
-    origin: "http://localhost:4200", // Must exactly match Angular dev server
+    origin: function (origin, callback) {
+      // allow requests with no origin (like mobile apps or curl requests)
+      if (!origin) return callback(null, true);
+      if (allowedOrigins.indexOf(origin) === -1) {
+        return callback(new Error('The CORS policy for this site does not allow access from the specified Origin.'), false);
+      }
+      return callback(null, true);
+    },
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-auth-token"],
-    credentials: true, // Required for cookies to be sent/received
+    credentials: true, 
   })
 );
 

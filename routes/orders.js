@@ -1,144 +1,186 @@
 const express = require("express");
 const router = express.Router();
+const mongoose = require("mongoose");
+const Order = require("../models/Order");
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
-const Order = require("../models/Order");
-const Counter = require("../models/Counter");
 
 /**
- * @route   POST api/orders
- * @desc    Create a new order with validation for hours and category
+ * @route GET api/orders/my-orders
+ * @desc Fetch user orders including feedback and admin replies
+ * Fixes the issue where "Rate Order" kept appearing after submission.
  */
-router.post("/", auth, async (req, res) => {
+router.get("/my-orders", auth, async (req, res) => {
   try {
-    const { orderType, items, tableNumbers } = req.body;
+    const userId = new mongoose.Types.ObjectId(req.user.id);
 
-    // 1. Operational Hours Check (11 AM - 10 PM)
-    const hour = new Date().getHours();
-    if (hour < 11 || hour >= 22) {
-      return res.status(403).json({ msg: "Restaurant is closed. Operating hours: 11 AM - 10 PM." });
-    }
+    // We use aggregate to join 'orders' with the 'ratings' collection
+    const orders = await Order.aggregate([
+      {
+        $match: { userId: userId },
+      },
+      {
+        $sort: { createdAt: -1 },
+      },
+      {
+        $lookup: {
+          from: "ratings", // The collection name for the Rating model
+          localField: "_id",
+          foreignField: "orderId",
+          as: "feedback",
+        },
+      },
+      {
+        $addFields: {
+          // Since lookup returns an array, we take the first element
+          feedback: { $arrayElemAt: ["$feedback", 0] },
+        },
+      },
+    ]);
 
-    // 2. Drinks Only Validation
-    const hasFood = items.some(item => item.category !== 'drinks');
-    if (!hasFood) {
-      return res.status(400).json({ msg: "Your feast must include at least one Veg or Non-Veg item." });
-    }
-
-    // 3. Table Availability Check
-    if (orderType === "DINE IN" && tableNumbers?.length > 0) {
-      const isOccupied = await Order.findOne({
-        tableNumbers: { $in: tableNumbers },
-        orderStatus: { $in: ["NEW", "PREPARING", "READY"] }
-      });
-      if (isOccupied) return res.status(400).json({ msg: "Selected table is occupied." });
-    }
-
-    // 4. Generate Sequence Number
-    let counter = await Counter.findOneAndUpdate(
-      { id: "orderNumber" }, 
-      { $inc: { seq: 1 } }, 
-      { new: true, upsert: true }
-    );
-    
-    const order = new Order({
-      ...req.body,
-      userId: req.user.id,
-      orderNumber: counter.seq.toString().padStart(6, "0"),
-      orderStatus: "NEW",
-      scheduledTime: new Date()
-    });
-
-    await order.save();
-    res.json(order);
+    res.json(orders);
   } catch (err) {
-    res.status(500).json({ msg: "Internal Server Error during order placement." });
+    console.error("Error fetching my-orders:", err.message);
+    res.status(500).send("Server Error");
   }
 });
 
 /**
- * @route   PUT api/orders/:id/cancel
- * @desc    Cancel order (ALLOWED: NEW only) - FIXED: Restored this route
+ * @route POST api/orders
+ * @desc Create a new order
+ */
+router.post("/", auth, async (req, res) => {
+  try {
+    const { items, totalAmount, paymentMethod, tableNumber, diningStyle } =
+      req.body;
+
+    const lastOrder = await Order.findOne().sort({ createdAt: -1 });
+    const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
+
+    const newOrder = new Order({
+      userId: req.user.id,
+      orderNumber,
+      items,
+      totalAmount,
+      paymentMethod,
+      tableNumber,
+      diningStyle,
+      orderStatus: "NEW",
+      paymentStatus: paymentMethod === "CASH" ? "PENDING" : "COMPLETED",
+    });
+
+    const savedOrder = await newOrder.save();
+    res.json(savedOrder);
+  } catch (err) {
+    res.status(500).send("Order Creation Failed");
+  }
+});
+
+/**
+ * @route GET api/orders/owner/all
+ * @desc Admin: Fetch all orders with user and feedback details
+ */
+router.get("/owner/all", [auth, admin], async (req, res) => {
+  try {
+    const orders = await Order.aggregate([
+      { $sort: { createdAt: -1 } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "userId",
+          foreignField: "_id",
+          as: "userDetails",
+        },
+      },
+      {
+        $lookup: {
+          from: "ratings",
+          localField: "_id",
+          foreignField: "orderId",
+          as: "feedback",
+        },
+      },
+      {
+        $addFields: {
+          user: { $arrayElemAt: ["$userDetails", 0] },
+          feedback: { $arrayElemAt: ["$feedback", 0] },
+        },
+      },
+      {
+        $project: {
+          userDetails: 0,
+          "user.passwordHash": 0,
+        },
+      },
+    ]);
+    res.json(orders);
+  } catch (err) {
+    res.status(500).send("Server Error");
+  }
+});
+
+/**
+ * @route PUT api/orders/owner/:id/status
+ * @desc Admin: Update order/payment status
+ */
+router.put("/owner/:id/status", [auth, admin], async (req, res) => {
+  try {
+    const { status, paymentStatus } = req.body;
+    const updateData = {};
+    if (status) updateData.orderStatus = status;
+    if (paymentStatus) updateData.paymentStatus = paymentStatus;
+
+    const order = await Order.findByIdAndUpdate(
+      req.params.id,
+      { $set: updateData },
+      { new: true },
+    );
+    res.json(order);
+  } catch (err) {
+    res.status(500).send("Update Failed");
+  }
+});
+
+/**
+ * @route PUT api/orders/:id/cancel
+ * @desc User: Cancel order if still in NEW state
  */
 router.put("/:id/cancel", auth, async (req, res) => {
   try {
     const order = await Order.findById(req.params.id);
     if (!order) return res.status(404).json({ msg: "Order not found" });
-    
-    // Authorization check
-    if (order.userId.toString() !== req.user.id) {
+    if (order.userId.toString() !== req.user.id)
       return res.status(401).json({ msg: "Unauthorized" });
-    }
-
-    // Status check
-    if (order.orderStatus !== "NEW") {
-      return res.status(400).json({ msg: "Cannot cancel order once it is in preparation." });
-    }
+    if (order.orderStatus !== "NEW")
+      return res.status(400).json({ msg: "Order already processing" });
 
     order.orderStatus = "CANCELLED";
     await order.save();
     res.json(order);
   } catch (err) {
-    res.status(500).json({ msg: "Server Error during cancellation." });
+    res.status(500).send("Cancellation Failed");
   }
 });
 
 /**
- * @route   GET api/orders/status/volume
+ * @route GET api/orders/status/volume
+ * @desc UI Utility: Kitchen load calculation and occupied tables
  */
 router.get("/status/volume", async (req, res) => {
   try {
-    const activeOrdersCount = await Order.countDocuments({
-      orderStatus: { $in: ["NEW", "PREPARING"] },
-    });
-    const occupiedOrders = await Order.find({
+    const activeOrders = await Order.countDocuments({
       orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
-      orderType: "DINE IN"
-    }).select("tableNumbers");
-
-    let occupiedTables = [];
-    occupiedOrders.forEach(order => {
-      if (order.tableNumbers) occupiedTables = [...occupiedTables, ...order.tableNumbers];
     });
 
-    res.json({ 
-      activeOrders: activeOrdersCount, 
-      waitTime: 15 + activeOrdersCount * 3,
-      occupiedTables: [...new Set(occupiedTables)] 
+    const occupiedTables = await Order.distinct("tableNumber", {
+      orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
+      tableNumber: { $exists: true },
     });
-  } catch (err) {
-    res.status(500).json({ msg: "Server Error" });
-  }
-});
 
-router.get("/my-orders", auth, async (req, res) => {
-  try {
-    const orders = await Order.find({ userId: req.user.id }).sort({ createdAt: -1 });
-    res.json(orders);
-  } catch (err) {
-    res.status(500).send("Server Error");
-  }
-});
+    // Simple heuristic for estimated wait time
+    const waitTime = activeOrders * 8 + 5;
 
-router.get("/owner/all", [auth, admin], async (req, res) => {
-  try {
-    const orders = await Order.find().populate("userId", "name mobile").sort({ createdAt: -1 });
-    res.json(orders);
-  } catch (err) {
-    res.status(500).send("Server Error");
-  }
-});
-
-router.put("/owner/:id/status", [auth, admin], async (req, res) => {
-  try {
-    const { status, paymentStatus } = req.body;
-    const order = await Order.findById(req.params.id);
-    if (!order) return res.status(404).json({ msg: "Order not found" });
-
-    order.orderStatus = status;
-    if (paymentStatus) order.paymentStatus = paymentStatus;
-    await order.save();
-    res.json(order);
+    res.json({ activeOrders, waitTime, occupiedTables });
   } catch (err) {
     res.status(500).send("Server Error");
   }

@@ -15,9 +15,9 @@ const RatingSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "Order",
     required: true,
-    unique: true,
+    unique: true, // Automatically creates a unique index; no need for manual schema.index()
   },
-  // Overall experience score (1-5)
+  // Overall experience score (0-5). 0 often indicates a dismissed modal.
   rating: {
     type: Number,
     required: true,
@@ -37,7 +37,7 @@ const RatingSchema = new Schema({
     maxlength: 500,
     default: "",
   },
-  // NEW: Owner Response capability
+  // NEW: Owner Response capability (Visible to users in My Orders)
   ownerReply: {
     type: String,
     maxlength: 500,
@@ -48,6 +48,7 @@ const RatingSchema = new Schema({
     type: Number,
     default: 0,
   },
+  // Flag to check if the user actually clicked submit vs just dismissing
   isSubmitted: {
     type: Boolean,
     default: false,
@@ -57,7 +58,5 @@ const RatingSchema = new Schema({
     default: Date.now,
   },
 });
-
-RatingSchema.index({ orderId: 1 }, { unique: true });
 
 module.exports = mongoose.model("Rating", RatingSchema);
