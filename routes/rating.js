@@ -66,7 +66,9 @@ router.post("/", auth, async (req, res) => {
 
     // Prevent duplicate submissions
     if (feedback && feedback.isSubmitted) {
-      return res.status(400).json({ msg: "Feedback already submitted for this order." });
+      return res
+        .status(400)
+        .json({ msg: "Feedback already submitted for this order." });
     }
 
     const ratingData = {
@@ -76,14 +78,14 @@ router.post("/", auth, async (req, res) => {
       comment: comment || "",
       dishRatings: dishRatings || [],
       isSubmitted: true,
-      createdAt: new Date()
+      createdAt: new Date(),
     };
 
     if (feedback) {
       feedback = await Rating.findOneAndUpdate(
         { orderId },
         { $set: ratingData },
-        { new: true }
+        { new: true },
       );
     } else {
       feedback = new Rating(ratingData);
@@ -92,10 +94,14 @@ router.post("/", auth, async (req, res) => {
 
     // Update Average Ratings in MenuItems via Python AI microservice (Async)
     if (dishRatings && dishRatings.length > 0) {
-      dishRatings.forEach(dish => {
-        axios.post("http://localhost:8000/aiml/update-rating", {
-          dishId: dish.menuItemId,
-        }).catch(() => { /* Silent failure for AI sync */ });
+      dishRatings.forEach((dish) => {
+        axios
+          .post("http://localhost:8000/aiml/update-rating", {
+            dishId: dish.menuItemId,
+          })
+          .catch(() => {
+            /* Silent failure for AI sync */
+          });
       });
     }
 
@@ -103,7 +109,9 @@ router.post("/", auth, async (req, res) => {
   } catch (err) {
     // Check for Mongoose Duplicate Key Error (code 11000)
     if (err.code === 11000) {
-      return res.status(400).json({ msg: "This order has already been rated." });
+      return res
+        .status(400)
+        .json({ msg: "This order has already been rated." });
     }
     res.status(500).send("Server Error");
   }
@@ -133,7 +141,7 @@ router.put("/admin/reply/:id", [auth, admin], async (req, res) => {
     const feedback = await Rating.findByIdAndUpdate(
       req.params.id,
       { $set: { ownerReply: reply } },
-      { new: true }
+      { new: true },
     );
     if (!feedback) return res.status(404).json({ msg: "Record not found" });
     res.json(feedback);
