@@ -6,10 +6,8 @@ const Rating = require("../models/Rating");
 const Order = require("../models/Order");
 const axios = require("axios");
 
-/**
- * @route   GET api/rating/check-pending
- * @desc    Check for the latest completed order without a submitted rating
- */
+// @route GET api/rating/check-pending
+// @desc Check for the latest completed order without a submitted rating
 router.get("/check-pending", auth, async (req, res) => {
   try {
     const lastOrder = await Order.findOne({
@@ -21,7 +19,6 @@ router.get("/check-pending", auth, async (req, res) => {
 
     const existingRating = await Rating.findOne({ orderId: lastOrder._id });
 
-    // User already provided feedback or chose 'Later' (isSubmitted: false records prevent re-prompting on home)
     if (existingRating) return res.json({ pending: false });
 
     res.json({
@@ -38,10 +35,8 @@ router.get("/check-pending", auth, async (req, res) => {
   }
 });
 
-/**
- * @route   POST api/rating
- * @desc    Submit granular dish and order feedback
- */
+// @route POST api/rating
+// @desc Submit granular dish and order feedback
 router.post("/", auth, async (req, res) => {
   const { orderId, rating, comment, dishRatings } = req.body;
 
@@ -66,29 +61,21 @@ router.post("/", auth, async (req, res) => {
     };
 
     if (feedback) {
-      feedback = await Rating.findOneAndUpdate(
-        { orderId },
-        { $set: ratingData },
-        { new: true },
-      );
+      feedback = await Rating.findOneAndUpdate({ orderId }, { $set: ratingData }, { new: true });
     } else {
       feedback = new Rating(ratingData);
       await feedback.save();
     }
-    
-// pdate Average Ratings in MenuItems ---
-    // Only trigger if feedback was actually submitted (rating > 0)
+
+    // Update Average Ratings in MenuItems via Python AI microservice
     if (rating > 0 && dishRatings && dishRatings.length > 0) {
-      // Loop through each dish that was rated by User 1
       for (const dish of dishRatings) {
         try {
-          // Tell the Python AIML server to recalculate the ceiling average for this dish
           await axios.post("http://localhost:8000/aiml/update-rating", {
-            dishId: dish.menuItemId
+            dishId: dish.menuItemId,
           });
-        } catch (aimlErr) {
-          console.error("AIML Sync Error: Could not update average for dish", dish.menuItemId);
-          // We don't block the response even if the AIML update fails
+        } catch (aimlerr) {
+          // Silent failure to avoid console spamming
         }
       }
     }
@@ -99,30 +86,28 @@ router.post("/", auth, async (req, res) => {
   }
 });
 
-/**
- * @route   PUT api/rating/admin/reply/:id
- * @desc    Owner: Respond to customer review
- */
+// @route PUT api/rating/admin/reply/:id
+// @desc Owner: Respond to customer review
 router.put("/admin/reply/:id", [auth, admin], async (req, res) => {
   try {
     const { reply } = req.body;
+
     const feedback = await Rating.findByIdAndUpdate(
       req.params.id,
       { $set: { ownerReply: reply } },
-      { new: true },
+      { new: true }
     );
 
     if (!feedback) return res.status(404).json({ msg: "Record not found" });
+
     res.json(feedback);
   } catch (err) {
     res.status(500).send("Server Error");
   }
 });
 
-/**
- * @route   GET api/rating/admin/all
- * @desc    Fetch all reviews for Admin dashboard
- */
+// @route GET api/rating/admin/all
+// @desc Fetch all reviews for Admin dashboard
 router.get("/admin/all", [auth, admin], async (req, res) => {
   try {
     const feedbackList = await Rating.find({ isSubmitted: true })
