@@ -10,8 +10,9 @@ module.exports = function (req, res, next) {
   }
 
   // 3. Verify token
+  // JWT_SECRET is guaranteed to exist — server.js crashes at startup if missing
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || "secret");
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
     req.user = decoded.user;
     next();
   } catch (err) {

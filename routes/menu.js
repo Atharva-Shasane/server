@@ -1,10 +1,14 @@
 const express = require("express");
 const router = express.Router();
 const MenuItem = require("../models/MenuItem");
+const RecommendationLog = require("../models/RecommendationLog");
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 const upload = require("../middleware/multer");
 const axios = require("axios");
+
+// Use env variable — consistent with rating.js fix
+const AIML_URL = process.env.AIML_URL || "http://localhost:8000";
 
 // @route GET api/menu
 // @desc Get all menu items
@@ -18,25 +22,20 @@ router.get("/", async (req, res) => {
 });
 
 // @route POST api/menu/recommendations
-// @desc Get recommendations from Python Service
+// @desc Get recommendations from Python AI service
 router.post("/recommendations", async (req, res) => {
   try {
     const { userId } = req.body;
     let pythonResponse;
 
-    // Use environment variable for the URL to support Render hosting.
-    // Ensure RECOMMENDER_URL is set to https://killa-aiml.onrender.com/aiml/recommend in Render dashboard.
-    const AIML_URL =
-      process.env.RECOMMENDER_URL || "http://localhost:8000/aiml/recommend";
-
     try {
       pythonResponse = await axios.post(
-        AIML_URL,
+        `${AIML_URL}/aiml/recommend`,
         { userId: userId || null },
-        { timeout: 5000 }, // Increased timeout slightly for cold starts on Render
+        { timeout: 5000 }
       );
     } catch (aiErr) {
-      // Fallback if AI service is down or slow
+      // Fallback if AI service is down or cold-starting
       const popularityFallback = await MenuItem.find({
         isAvailable: true,
         category: { $ne: "drinks" },
@@ -62,6 +61,21 @@ router.post("/recommendations", async (req, res) => {
       .map((id) => recommendedDishes.find((d) => d._id.toString() === id))
       .filter(Boolean);
 
+    // IMPROVEMENT: Save recommendation log so the owner can track AI suggestions.
+    // Non-blocking — log failure does not affect the response.
+    if (userId && sortedDishes.length > 0) {
+      RecommendationLog.create({
+        userId,
+        recommendedItems: sortedDishes.map((d) => ({
+          menuItemId: d._id,
+          name: d.name,
+          score: 0, // Score not returned by API; enrich later if needed
+        })),
+      }).catch((err) =>
+        console.warn("[MENU] RecommendationLog save failed:", err.message)
+      );
+    }
+
     return res.json(sortedDishes);
   } catch (err) {
     res.status(500).send("Recommendation Bridge Error");
@@ -77,12 +91,10 @@ router.post("/", [auth, admin, upload.single("image")], async (req, res) => {
         .status(400)
         .json({ msg: "Please upload an image for the dish." });
     }
-
     const menuData = { ...req.body };
     if (typeof menuData.pricing === "string") {
       menuData.pricing = JSON.parse(menuData.pricing);
     }
-
     menuData.imageUrl = req.file.path;
     const newItem = new MenuItem(menuData);
     const item = await newItem.save();
@@ -97,23 +109,18 @@ router.post("/", [auth, admin, upload.single("image")], async (req, res) => {
 router.put("/:id", [auth, admin, upload.single("image")], async (req, res) => {
   try {
     const updateData = { ...req.body };
-
     if (typeof updateData.pricing === "string") {
       updateData.pricing = JSON.parse(updateData.pricing);
     }
-
     if (req.file) {
       updateData.imageUrl = req.file.path;
     }
-
     const item = await MenuItem.findByIdAndUpdate(
       req.params.id,
       { $set: updateData },
-      { new: true },
+      { new: true }
     );
-
     if (!item) return res.status(404).json({ msg: "Item not found" });
-
     res.json(item);
   } catch (err) {
     res.status(500).send("Server Error");

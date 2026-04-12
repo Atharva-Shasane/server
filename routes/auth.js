@@ -8,16 +8,13 @@ const auth = require("../middleware/auth");
 
 /**
  * Helper: Send Email via Resend API
- * Logs specific API errors and provides an emergency console fallback.
  */
 async function sendOTPEmail(email, otp) {
   const RESEND_API_KEY = process.env.RESEND_API_KEY;
-
   if (!RESEND_API_KEY) {
     console.log(`[FALLBACK OTP] Code for ${email}: ${otp}`);
     return;
   }
-
   try {
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
@@ -41,18 +38,14 @@ async function sendOTPEmail(email, otp) {
         `,
       }),
     });
-
     const data = await response.json();
-
     if (!response.ok) {
       console.error("❌ [RESEND API ERROR]:", data);
       throw new Error(data.message || "Failed to send email");
     }
-
     console.log(`[AUTH] Email sent successfully to ${email}. ID: ${data.id}`);
   } catch (error) {
     console.error("❌ [EMAIL SYSTEM FAILURE]:", error.message);
-    // Keep this emergency log so you can still log in if the API fails or is restricted
     console.log(`[EMERGENCY OTP LOG] Code for ${email}: ${otp}`);
   }
 }
@@ -66,32 +59,36 @@ const isPasswordStrong = (pwd) => {
   return regex.test(pwd);
 };
 
-// Global Cookie Options for Local vs Production
+// FIX: JWT_SECRET is guaranteed to exist (server.js crashes at startup if missing)
+// Removed all || "secret" fallbacks throughout this file.
 const isProduction = process.env.NODE_ENV === "production";
+
+// FIX: Single source of truth for cookie options
+// clearCookie uses the same object — no more stripping maxAge manually
 const cookieOptions = {
   httpOnly: true,
-  secure: isProduction, // Only true on HTTPS (Hosted)
-  sameSite: isProduction ? "None" : "Lax", // "None" required for cross-site cookies in Prod
+  secure: isProduction,
+  sameSite: isProduction ? "None" : "Lax",
   maxAge: 24 * 60 * 60 * 1000, // 24 hours
 };
 
 /**
  * @route POST api/auth/request-otp
  * @desc Request OTP for registration or owner login
+ * NOTE: This endpoint is additionally rate-limited in server.js (20 req/15min)
+ * to prevent OTP farming attacks.
  */
 router.post("/request-otp", async (req, res) => {
   const { email } = req.body;
   if (!email) return res.status(400).json({ msg: "Email is required" });
 
   const otp = generateOTP();
-
   try {
     await Otp.findOneAndUpdate(
       { email: email.toLowerCase() },
       { otp, attempts: 0, createdAt: new Date() },
-      { upsert: true, new: true },
+      { upsert: true, new: true }
     );
-
     await sendOTPEmail(email.toLowerCase(), otp);
     res.json({ msg: "Verification code sent to your email." });
   } catch (err) {
@@ -113,7 +110,6 @@ router.post("/register", async (req, res) => {
   }
 
   const storedOtp = await Otp.findOne({ email: email.toLowerCase() });
-
   if (!storedOtp)
     return res.status(400).json({ msg: "OTP expired or not requested." });
 
@@ -126,11 +122,9 @@ router.post("/register", async (req, res) => {
         .status(400)
         .json({ msg: "Too many failed attempts. Please request a new code." });
     }
-    return res
-      .status(400)
-      .json({
-        msg: `Invalid OTP. ${3 - storedOtp.attempts} attempts remaining.`,
-      });
+    return res.status(400).json({
+      msg: `Invalid OTP. ${3 - storedOtp.attempts} attempts remaining.`,
+    });
   }
 
   try {
@@ -148,16 +142,15 @@ router.post("/register", async (req, res) => {
     const salt = await bcrypt.genSalt(10);
     user.passwordHash = await bcrypt.hash(password, salt);
     await user.save();
-
     await Otp.deleteOne({ email: email.toLowerCase() });
 
     const payload = { user: { id: user.id, role: user.role } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
+    // FIX: No fallback — JWT_SECRET is guaranteed by server.js startup check
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
       expiresIn: "24h",
     });
 
     res.cookie("token", token, cookieOptions);
-
     res.json({
       user: {
         id: user.id,
@@ -177,23 +170,22 @@ router.post("/register", async (req, res) => {
  */
 router.post("/login", async (req, res) => {
   const { email, password, otp } = req.body;
-
   try {
     let user = await User.findOne({ email: email.toLowerCase() });
     if (!user) return res.status(400).json({ msg: "Invalid Credentials" });
 
     const isMatch = await bcrypt.compare(password, user.passwordHash);
-    if (!isMatch) return res.status(400).json({ msg: "Invalid Credentials" });
+    if (!isMatch)
+      return res.status(400).json({ msg: "Invalid Credentials" });
 
     if (user.role === "OWNER") {
       const storedOtp = await Otp.findOne({ email: email.toLowerCase() });
-
       if (!otp) {
         const newOtp = generateOTP();
         await Otp.findOneAndUpdate(
           { email: email.toLowerCase() },
           { otp: newOtp, attempts: 0, createdAt: new Date() },
-          { upsert: true },
+          { upsert: true }
         );
         await sendOTPEmail(email.toLowerCase(), newOtp);
         return res.json({
@@ -201,11 +193,9 @@ router.post("/login", async (req, res) => {
           msg: "Owner verification code sent to your email.",
         });
       }
-
       if (!storedOtp || storedOtp.otp !== otp) {
         return res.status(400).json({ msg: "Invalid or expired OTP" });
       }
-
       await Otp.deleteOne({ email: email.toLowerCase() });
     }
 
@@ -213,12 +203,12 @@ router.post("/login", async (req, res) => {
     await user.save();
 
     const payload = { user: { id: user.id, role: user.role } };
-    const token = jwt.sign(payload, process.env.JWT_SECRET || "secret", {
+    // FIX: No fallback — JWT_SECRET is guaranteed by server.js startup check
+    const token = jwt.sign(payload, process.env.JWT_SECRET, {
       expiresIn: "24h",
     });
 
     res.cookie("token", token, cookieOptions);
-
     res.json({
       user: {
         id: user.id,
@@ -234,12 +224,13 @@ router.post("/login", async (req, res) => {
 
 /**
  * @route POST api/auth/logout
- * @desc Clear authentication cookie. Fixes deprecation warning by removing maxAge.
+ * FIX: Pass the full cookieOptions to clearCookie.
+ * sameSite:"None" and secure:true must match the original Set-Cookie header
+ * exactly, otherwise browsers silently ignore the clear request.
+ * maxAge is automatically ignored by clearCookie — it sets expires=past internally.
  */
 router.post("/logout", (req, res) => {
-  // Remove maxAge from options as res.clearCookie handles expiration internally in Express 5.x patterns
-  const { maxAge, ...clearOptions } = cookieOptions;
-  res.clearCookie("token", clearOptions);
+  res.clearCookie("token", cookieOptions);
   res.json({ msg: "Logged out successfully" });
 });
 

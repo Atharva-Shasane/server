@@ -2,6 +2,8 @@ const express = require("express");
 const router = express.Router();
 const mongoose = require("mongoose");
 const Order = require("../models/Order");
+const Counter = require("../models/Counter");
+const OrderStatusLog = require("../models/OrderStatusLog");
 const auth = require("../middleware/auth");
 const admin = require("../middleware/admin");
 
@@ -12,7 +14,6 @@ const admin = require("../middleware/admin");
 const mapOrderType = (diningStyle) => {
   if (!diningStyle) return "DINE IN";
   const normalized = diningStyle.toString().toUpperCase().trim();
-  // Handle all common variants from the frontend
   if (
     normalized === "DINE_IN" ||
     normalized === "DINE IN" ||
@@ -29,8 +30,23 @@ const mapOrderType = (diningStyle) => {
   ) {
     return "TAKEAWAY";
   }
-  // Default fallback
   return "DINE IN";
+};
+
+/**
+ * FIX: Atomic order number generation using the Counter collection.
+ * Replaces the race-condition-prone findOne().sort() pattern.
+ * findOneAndUpdate with $inc is atomic — two simultaneous orders
+ * will always get different sequential numbers.
+ */
+const getNextOrderNumber = async () => {
+  const counter = await Counter.findOneAndUpdate(
+    { id: "orderId" },
+    { $inc: { seq: 1 } },
+    { upsert: true, new: true }
+  );
+  // Start order numbers at 1001 by offsetting the seq value
+  return counter.seq + 1000;
 };
 
 /**
@@ -67,7 +83,6 @@ router.get("/my-orders", auth, async (req, res) => {
 /**
  * @route POST api/orders
  * @desc Create a new order.
- * FIX: mapOrderType() correctly normalizes diningStyle to schema enum values.
  */
 router.post("/", auth, async (req, res) => {
   try {
@@ -93,25 +108,21 @@ router.post("/", auth, async (req, res) => {
       return res.status(400).json({ msg: "No items provided in the order." });
     }
 
-    const lastOrder = await Order.findOne().sort({ createdAt: -1 });
-    const orderNumber = lastOrder ? lastOrder.orderNumber + 1 : 1001;
+    // FIX: Use atomic Counter-based order number — eliminates race conditions
+    const orderNumber = await getNextOrderNumber();
 
-    // FIX: Use mapOrderType() to convert any frontend variant to the
-    // correct schema enum value ("DINE IN" or "TAKEAWAY")
     const orderType = mapOrderType(diningStyle);
 
-    // FIX: Use the scheduledTime sent by the frontend (the user's chosen
-    // arrival/pickup slot). Fall back to now only if nothing was sent.
     const scheduledTime = scheduledTimeRaw
       ? new Date(scheduledTimeRaw)
       : new Date();
 
-    // Normalize tableNumbers: accept both array (new) and scalar (legacy)
-    const resolvedTableNumbers = tableNumbers && tableNumbers.length
-      ? tableNumbers
-      : tableNumber
-      ? [tableNumber]
-      : [];
+    const resolvedTableNumbers =
+      tableNumbers && tableNumbers.length
+        ? tableNumbers
+        : tableNumber
+        ? [tableNumber]
+        : [];
 
     const newOrder = new Order({
       userId: req.user.id,
@@ -123,7 +134,7 @@ router.post("/", auth, async (req, res) => {
       numberOfPeople: numberOfPeople || 1,
       diningStyle,
       orderType: orderType,
-      scheduledTime: scheduledTime,   // ✅ User's chosen arrival/pickup time
+      scheduledTime: scheduledTime,
       transactionId: transactionId || "",
       orderStatus: "NEW",
       paymentStatus: paymentMethod === "CASH" ? "PENDING" : "PAID",
@@ -131,6 +142,14 @@ router.post("/", auth, async (req, res) => {
     });
 
     const savedOrder = await newOrder.save();
+
+    // IMPROVEMENT: Write initial status log entry
+    await OrderStatusLog.create({
+      orderId: savedOrder._id,
+      status: "NEW",
+      changedBy: "SYSTEM",
+    });
+
     console.log(
       `✅ [ORDER SUCCESS]: #${orderNumber} placed by user ${req.user.id} | orderType: "${orderType}"`
     );
@@ -146,41 +165,63 @@ router.post("/", auth, async (req, res) => {
 
 /**
  * @route GET api/orders/owner/all
+ * PERFORMANCE FIX: Added pagination and $project to avoid loading all fields.
+ * Use ?page=1&limit=20 query params. Defaults to page 1, 20 orders.
  */
 router.get("/owner/all", [auth, admin], async (req, res) => {
   try {
-    const orders = await Order.aggregate([
-      { $sort: { createdAt: -1 } },
-      {
-        $lookup: {
-          from: "users",
-          localField: "userId",
-          foreignField: "_id",
-          as: "userDetails",
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+    const skip = (page - 1) * limit;
+
+    const [orders, total] = await Promise.all([
+      Order.aggregate([
+        { $sort: { createdAt: -1 } },
+        { $skip: skip },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: "users",
+            localField: "userId",
+            foreignField: "_id",
+            as: "userDetails",
+          },
         },
-      },
-      {
-        $lookup: {
-          from: "ratings",
-          localField: "_id",
-          foreignField: "orderId",
-          as: "feedback",
+        {
+          $lookup: {
+            from: "ratings",
+            localField: "_id",
+            foreignField: "orderId",
+            as: "feedback",
+          },
         },
-      },
-      {
-        $addFields: {
-          user: { $arrayElemAt: ["$userDetails", 0] },
-          feedback: { $arrayElemAt: ["$feedback", 0] },
+        {
+          $addFields: {
+            user: { $arrayElemAt: ["$userDetails", 0] },
+            feedback: { $arrayElemAt: ["$feedback", 0] },
+          },
         },
-      },
-      {
-        $project: {
-          userDetails: 0,
-          "user.passwordHash": 0,
+        {
+          $project: {
+            userDetails: 0,
+            "user.passwordHash": 0,
+            "user.createdAt": 0,
+            "user.lastLogin": 0,
+          },
         },
-      },
+      ]),
+      Order.countDocuments(),
     ]);
-    res.json(orders);
+
+    res.json({
+      orders,
+      pagination: {
+        total,
+        page,
+        limit,
+        pages: Math.ceil(total / limit),
+      },
+    });
   } catch (err) {
     console.error("❌ [ADMIN ORDERS FETCH FAILED]:", err.message);
     res.status(500).send("Server Error");
@@ -189,6 +230,7 @@ router.get("/owner/all", [auth, admin], async (req, res) => {
 
 /**
  * @route PUT api/orders/owner/:id/status
+ * IMPROVEMENT: Now writes an OrderStatusLog entry on every status change.
  */
 router.put("/owner/:id/status", [auth, admin], async (req, res) => {
   try {
@@ -202,6 +244,18 @@ router.put("/owner/:id/status", [auth, admin], async (req, res) => {
       { $set: updateData },
       { new: true }
     );
+
+    if (!order) return res.status(404).json({ msg: "Order not found" });
+
+    // IMPROVEMENT: Log the status change with who made it
+    if (status) {
+      await OrderStatusLog.create({
+        orderId: order._id,
+        status: status,
+        changedBy: "OWNER",
+      });
+    }
+
     res.json(order);
   } catch (err) {
     res.status(500).send("Update Failed");
@@ -218,12 +272,18 @@ router.put("/:id/cancel", auth, async (req, res) => {
     if (order.userId.toString() !== req.user.id)
       return res.status(401).json({ msg: "Unauthorized" });
     if (order.orderStatus !== "NEW")
-      return res
-        .status(400)
-        .json({ msg: "Order is already being prepared" });
+      return res.status(400).json({ msg: "Order is already being prepared" });
 
     order.orderStatus = "CANCELLED";
     await order.save();
+
+    // Log the cancellation
+    await OrderStatusLog.create({
+      orderId: order._id,
+      status: "CANCELLED",
+      changedBy: "SYSTEM",
+    }).catch(() => {}); // Non-blocking — cancellation succeeds even if log fails
+
     res.json(order);
   } catch (err) {
     res.status(500).send("Cancellation Failed");
@@ -237,30 +297,28 @@ router.get("/status/volume", async (req, res) => {
   try {
     const twelveHoursAgo = new Date(Date.now() - 12 * 60 * 60 * 1000);
 
-    // Count active orders for wait time estimate
     const activeOrders = await Order.countDocuments({
       orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
       createdAt: { $gte: twelveHoursAgo },
     });
 
-    // CORRECT LOGIC: A table is occupied from the moment an order is placed
-    // on it until that order is marked COMPLETED or CANCELLED by the owner.
-    // NO time-window filter — if an order is active (NEW/PREPARING/READY)
-    // on that table, the table is blocked regardless of when the customer arrives.
-    // This prevents double-booking entirely.
     const activeTableOrders = await Order.find({
       orderStatus: { $in: ["NEW", "PREPARING", "READY"] },
       tableNumbers: { $exists: true, $not: { $size: 0 } },
     }).select("tableNumbers");
 
-    // Flatten all tableNumbers from all active orders into one unique set
     const occupiedTablesSet = new Set();
-    activeTableOrders.forEach(order => {
-      (order.tableNumbers || []).forEach(t => occupiedTablesSet.add(Number(t)));
+    activeTableOrders.forEach((order) => {
+      (order.tableNumbers || []).forEach((t) =>
+        occupiedTablesSet.add(Number(t))
+      );
     });
+
     const occupiedTables = Array.from(occupiedTablesSet);
 
-    console.log(`📊 [STATUS/VOLUME] Active: ${activeOrders} | Occupied tables: [${occupiedTables.join(", ")}]`);
+    console.log(
+      `📊 [STATUS/VOLUME] Active: ${activeOrders} | Occupied tables: [${occupiedTables.join(", ")}]`
+    );
 
     const waitTime = activeOrders * 8 + 5;
     res.json({ activeOrders, waitTime, occupiedTables });

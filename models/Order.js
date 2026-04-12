@@ -16,9 +16,7 @@ const OrderSchema = new Schema({
     enum: ["DINE IN", "TAKEAWAY"],
     required: true,
   },
-  tableNumbers: [{
-    type: Number,
-  }],
+  tableNumbers: [{ type: Number }],
   numberOfPeople: {
     type: Number,
     default: 1,
@@ -34,31 +32,12 @@ const OrderSchema = new Schema({
         ref: "MenuItem",
         required: true,
       },
-      name: {
-        type: String,
-        required: true
-      },
-      category: {
-        type: String,
-        required: true 
-      },
-      quantity: {
-        type: Number,
-        required: true,
-        min: 1,
-      },
-      unitPrice: {
-        type: Number,
-        required: true,
-      },
-      variant: {
-        type: String,
-        default: "SINGLE",
-      },
-      instructions: {
-        type: String,
-        default: "",
-      },
+      name: { type: String, required: true },
+      category: { type: String, required: true },
+      quantity: { type: Number, required: true, min: 1 },
+      unitPrice: { type: Number, required: true },
+      variant: { type: String, default: "SINGLE" },
+      instructions: { type: String, default: "" },
     },
   ],
   totalAmount: {
@@ -98,5 +77,20 @@ OrderSchema.pre("save", function (next) {
   this.updatedAt = Date.now();
   next();
 });
+
+// PERFORMANCE FIX: Add indexes for the most frequent query patterns.
+// These eliminate full collection scans as the orders collection grows.
+
+// My Orders page: find by userId, sorted by createdAt
+OrderSchema.index({ userId: 1, createdAt: -1 });
+
+// Owner dashboard & status filters: filter by status
+OrderSchema.index({ orderStatus: 1, createdAt: -1 });
+
+// Analytics routes: filter by scheduledTime range + status
+OrderSchema.index({ scheduledTime: 1, orderStatus: 1 });
+
+// Volume/table availability check: active orders by status
+OrderSchema.index({ orderStatus: 1, tableNumbers: 1 });
 
 module.exports = mongoose.model("Order", OrderSchema);

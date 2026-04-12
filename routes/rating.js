@@ -6,6 +6,11 @@ const Rating = require("../models/Rating");
 const Order = require("../models/Order");
 const axios = require("axios");
 
+// FIX: Use environment variable for AIML service URL — never hardcode localhost.
+// In production (Render), set AIML_URL=https://killa-aiml.onrender.com
+// In development it falls back to localhost automatically.
+const AIML_URL = process.env.AIML_URL || "http://localhost:8000";
+
 // @route GET api/rating/check-pending
 // @desc Check for the latest completed order without a submitted rating
 router.get("/check-pending", auth, async (req, res) => {
@@ -42,7 +47,6 @@ router.get("/check-pending", auth, async (req, res) => {
 router.post("/", auth, async (req, res) => {
   const { orderId, rating, comment, dishRatings } = req.body;
 
-  // Basic Validation
   if (!orderId) {
     return res.status(400).json({ msg: "Order ID is required" });
   }
@@ -50,7 +54,7 @@ router.post("/", auth, async (req, res) => {
   try {
     let feedback = await Rating.findOne({ orderId });
 
-    // If rating is 0, it means the user dismissed the modal
+    // If rating is 0, the user dismissed the modal
     if (rating === 0) {
       if (!feedback) {
         feedback = new Rating({
@@ -85,29 +89,36 @@ router.post("/", auth, async (req, res) => {
       feedback = await Rating.findOneAndUpdate(
         { orderId },
         { $set: ratingData },
-        { new: true },
+        { new: true }
       );
     } else {
       feedback = new Rating(ratingData);
       await feedback.save();
     }
 
-    // Update Average Ratings in MenuItems via Python AI microservice (Async)
+    // FIX: Use AIML_URL env variable instead of hardcoded localhost.
+    // This was silently failing in production — dish ratings never updated.
     if (dishRatings && dishRatings.length > 0) {
       dishRatings.forEach((dish) => {
         axios
-          .post("http://localhost:8000/aiml/update-rating", {
-            dishId: dish.menuItemId,
-          })
-          .catch(() => {
-            /* Silent failure for AI sync */
+          .post(
+            `${AIML_URL}/aiml/update-rating`,
+            { dishId: dish.menuItemId },
+            { timeout: 5000 }
+          )
+          .catch((err) => {
+            // Non-blocking — rating save succeeds even if AI sync fails
+            console.warn(
+              `[RATING] AI sync failed for dish ${dish.menuItemId}:`,
+              err.message
+            );
           });
       });
     }
 
     res.json(feedback);
   } catch (err) {
-    // Check for Mongoose Duplicate Key Error (code 11000)
+    // Mongoose Duplicate Key Error
     if (err.code === 11000) {
       return res
         .status(400)
@@ -127,7 +138,6 @@ router.get("/admin/all", [auth, admin], async (req, res) => {
         select: "orderNumber totalAmount items createdAt",
       })
       .sort({ createdAt: -1 });
-
     res.json(feedbackList);
   } catch (err) {
     res.status(500).send("Server Error");
@@ -141,9 +151,10 @@ router.put("/admin/reply/:id", [auth, admin], async (req, res) => {
     const feedback = await Rating.findByIdAndUpdate(
       req.params.id,
       { $set: { ownerReply: reply } },
-      { new: true },
+      { new: true }
     );
-    if (!feedback) return res.status(404).json({ msg: "Record not found" });
+    if (!feedback)
+      return res.status(404).json({ msg: "Record not found" });
     res.json(feedback);
   } catch (err) {
     res.status(500).send("Server Error");

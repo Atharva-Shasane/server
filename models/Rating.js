@@ -15,16 +15,16 @@ const RatingSchema = new Schema({
     type: Schema.Types.ObjectId,
     ref: "Order",
     required: true,
-    unique: true, // Automatically creates a unique index; no need for manual schema.index()
+    unique: true, // Automatically creates a unique index
   },
-  // Overall experience score (0-5). 0 often indicates a dismissed modal.
+  // Overall experience score (0-5). 0 = dismissed modal.
   rating: {
     type: Number,
     required: true,
     min: 0,
     max: 5,
   },
-  // NEW: Individual dish ratings for the AIML discovery engine
+  // Individual dish ratings for the AIML discovery engine
   dishRatings: [
     {
       menuItemId: { type: Schema.Types.ObjectId, ref: "MenuItem" },
@@ -37,7 +37,7 @@ const RatingSchema = new Schema({
     maxlength: 500,
     default: "",
   },
-  // NEW: Owner Response capability (Visible to users in My Orders)
+  // Owner Response capability (Visible to users in My Orders)
   ownerReply: {
     type: String,
     maxlength: 500,
@@ -48,7 +48,7 @@ const RatingSchema = new Schema({
     type: Number,
     default: 0,
   },
-  // Flag to check if the user actually clicked submit vs just dismissing
+  // Flag to check if the user actually submitted vs just dismissing
   isSubmitted: {
     type: Boolean,
     default: false,
@@ -58,5 +58,12 @@ const RatingSchema = new Schema({
     default: Date.now,
   },
 });
+
+// PERFORMANCE FIX: Index on isSubmitted — the admin/all route filters by this.
+// Without it every admin page load scans the entire ratings collection.
+RatingSchema.index({ isSubmitted: 1, createdAt: -1 });
+
+// Index for the AIML sync queries: find ratings by dish across all feedbacks
+RatingSchema.index({ "dishRatings.menuItemId": 1, isSubmitted: 1 });
 
 module.exports = mongoose.model("Rating", RatingSchema);
