@@ -65,6 +65,8 @@ const allowedOrigins = [
   "http://127.0.0.1:4200",
   "https://killarestaurant.netlify.app",
   "https://killa-restaurant.onrender.com",
+  "https://killarestaurant.live",
+  "https://www.killarestaurant.live",
 ];
 
 if (process.env.FRONTEND_URL) {
