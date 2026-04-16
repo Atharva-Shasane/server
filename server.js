@@ -10,11 +10,15 @@ require("dotenv").config();
 // --- STARTUP VALIDATION ---
 // Crash immediately if critical secrets are missing — never fall back to weak defaults
 if (!process.env.JWT_SECRET) {
-  console.error("CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.");
+  console.error(
+    "CRITICAL: JWT_SECRET environment variable is not set. Refusing to start.",
+  );
   process.exit(1);
 }
 if (!process.env.MONGO_URI) {
-  console.error("CRITICAL: MONGO_URI environment variable is not set. Refusing to start.");
+  console.error(
+    "CRITICAL: MONGO_URI environment variable is not set. Refusing to start.",
+  );
   process.exit(1);
 }
 
@@ -60,6 +64,7 @@ const allowedOrigins = [
   "http://localhost:4200",
   "http://127.0.0.1:4200",
   "https://killarestaurant.netlify.app",
+  "https://killa-restaurant.onrender.com",
 ];
 
 if (process.env.FRONTEND_URL) {
@@ -76,15 +81,15 @@ app.use(
     origin: function (origin, callback) {
       if (!origin) return callback(null, true);
       const isAllowed = allowedOrigins.some((allowed) =>
-        origin.startsWith(allowed)
+        origin.startsWith(allowed),
       );
       if (!isAllowed) {
         console.warn(`Blocked by CORS: ${origin}`);
         return callback(
           new Error(
-            "The CORS policy for this site does not allow access from the specified Origin."
+            "The CORS policy for this site does not allow access from the specified Origin.",
           ),
-          false
+          false,
         );
       }
       return callback(null, true);
@@ -92,7 +97,7 @@ app.use(
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization", "x-auth-token"],
     credentials: true,
-  })
+  }),
 );
 
 // BODY PARSING
